@@ -79,3 +79,4 @@ javanano/target
 *.sdf
 *.opensdf
 *.filters
+*.suo
