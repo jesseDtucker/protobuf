@@ -80,3 +80,14 @@ javanano/target
 *.opensdf
 *.filters
 *.suo
+*.user
+
+# Output files
+*.obj
+*.lib
+*.exe
+*.tlog
+*.log
+*.idb
+*.pdb
+*.ilk
