@@ -119,6 +119,7 @@ conformance/protoc_middleman
 *.filters
 *.suo
 *.user
+vs/*
 
 # Output files
 *.obj
