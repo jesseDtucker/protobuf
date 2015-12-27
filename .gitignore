@@ -112,3 +112,20 @@ conformance/Conformance.pbobjc.m
 conformance/conformance.rb
 conformance/javac_middleman
 conformance/protoc_middleman
+
+# VS files
+*.sdf
+*.opensdf
+*.filters
+*.suo
+*.user
+
+# Output files
+*.obj
+*.lib
+*.exe
+*.tlog
+*.log
+*.idb
+*.pdb
+*.ilk

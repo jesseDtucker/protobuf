@@ -1,0 +1,6 @@
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/libprotoc.dir
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/ALL_BUILD.dir
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/libprotobuf.dir
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/libprotobuf-lite.dir
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/ZERO_CHECK.dir
+C:/Users/Jesse/Source/Repos/protobuf/vs/CMakeFiles/protoc.dir
