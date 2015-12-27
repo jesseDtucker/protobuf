@@ -213,18 +213,23 @@ MessageLite* ExtensionSet::ReleaseMessage(const FieldDescriptor* descriptor,
   }
 }
 
-MessageLite* ExtensionSet::AddMessage(const FieldDescriptor* descriptor,
-                                      MessageFactory* factory) {
+ExtensionSet::Extension* ExtensionSet::MaybeNewRepeatedExtension(const FieldDescriptor* descriptor) {
   Extension* extension;
   if (MaybeNewExtension(descriptor->number(), descriptor, &extension)) {
     extension->type = descriptor->type();
     GOOGLE_DCHECK_EQ(cpp_type(extension->type), FieldDescriptor::CPPTYPE_MESSAGE);
     extension->is_repeated = true;
     extension->repeated_message_value =
-        ::google::protobuf::Arena::Create<RepeatedPtrField<MessageLite> >(arena_, arena_);
+        ::google::protobuf::Arena::CreateMessage<RepeatedPtrField<MessageLite> >(arena_);
   } else {
     GOOGLE_DCHECK_TYPE(*extension, REPEATED, MESSAGE);
   }
+  return extension;
+}
+
+MessageLite* ExtensionSet::AddMessage(const FieldDescriptor* descriptor,
+                                      MessageFactory* factory) {
+  Extension* extension = MaybeNewRepeatedExtension(descriptor);
 
   // RepeatedPtrField<Message> does not know how to Add() since it cannot
   // allocate an abstract object, so we have to be tricky.
@@ -242,6 +247,13 @@ MessageLite* ExtensionSet::AddMessage(const FieldDescriptor* descriptor,
     extension->repeated_message_value->AddAllocated(result);
   }
   return result;
+}
+
+void ExtensionSet::AddAllocatedMessage(const FieldDescriptor* descriptor,
+                                       MessageLite* new_entry) {
+  Extension* extension = MaybeNewRepeatedExtension(descriptor);
+
+  extension->repeated_message_value->AddAllocated(new_entry);
 }
 
 static bool ValidateEnumUsingDescriptor(const void* arg, int number) {

@@ -48,13 +48,16 @@
 // Every test consists of a ConformanceRequest/ConformanceResponse
 // request/reply pair.  The protocol on the pipe is simply:
 //
-//   1. tester sends 4-byte length N
+//   1. tester sends 4-byte length N (little endian)
 //   2. tester sends N bytes representing a ConformanceRequest proto
-//   3. testee sends 4-byte length M
+//   3. testee sends 4-byte length M (little endian)
 //   4. testee sends M bytes representing a ConformanceResponse proto
 
+#include <algorithm>
 #include <errno.h>
 #include <unistd.h>
+#include <fstream>
+#include <vector>
 
 #include "conformance.pb.h"
 #include "conformance_test.h"
@@ -62,6 +65,8 @@
 using conformance::ConformanceRequest;
 using conformance::ConformanceResponse;
 using google::protobuf::internal::scoped_array;
+using std::string;
+using std::vector;
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
@@ -76,12 +81,18 @@ using google::protobuf::internal::scoped_array;
 class ForkPipeRunner : public google::protobuf::ConformanceTestRunner {
  public:
   ForkPipeRunner(const std::string &executable)
-      : executable_(executable), running_(false) {}
+      : running_(false), executable_(executable) {}
 
-  void RunTest(const std::string& request, std::string* response) {
+  virtual ~ForkPipeRunner() {}
+
+  void RunTest(const std::string& test_name,
+               const std::string& request,
+               std::string* response) {
     if (!running_) {
       SpawnTestProgram();
     }
+
+    current_test_name_ = test_name;
 
     uint32_t len = request.size();
     CheckedWrite(write_fd_, &len, sizeof(uint32_t));
@@ -143,8 +154,9 @@ class ForkPipeRunner : public google::protobuf::ConformanceTestRunner {
       CHECK_SYSCALL(close(toproc_pipe_fd[1]));
       CHECK_SYSCALL(close(fromproc_pipe_fd[0]));
 
-      scoped_array<char> executable(new char[executable_.size()]);
+      scoped_array<char> executable(new char[executable_.size() + 1]);
       memcpy(executable.get(), executable_.c_str(), executable_.size());
+      executable[executable_.size()] = '\0';
 
       char *const argv[] = {executable.get(), NULL};
       CHECK_SYSCALL(execv(executable.get(), argv));  // Never returns.
@@ -153,7 +165,9 @@ class ForkPipeRunner : public google::protobuf::ConformanceTestRunner {
 
   void CheckedWrite(int fd, const void *buf, size_t len) {
     if (write(fd, buf, len) != len) {
-      GOOGLE_LOG(FATAL) << "Error writing to test program: " << strerror(errno);
+      GOOGLE_LOG(FATAL) << current_test_name_
+                        << ": error writing to test program: "
+                        << strerror(errno);
     }
   }
 
@@ -163,9 +177,12 @@ class ForkPipeRunner : public google::protobuf::ConformanceTestRunner {
       ssize_t bytes_read = read(fd, (char*)buf + ofs, len);
 
       if (bytes_read == 0) {
-        GOOGLE_LOG(FATAL) << "Unexpected EOF from test program";
+        GOOGLE_LOG(FATAL) << current_test_name_
+                          << ": unexpected EOF from test program";
       } else if (bytes_read < 0) {
-        GOOGLE_LOG(FATAL) << "Error reading from test program: " << strerror(errno);
+        GOOGLE_LOG(FATAL) << current_test_name_
+                          << ": error reading from test program: "
+                          << strerror(errno);
       }
 
       len -= bytes_read;
@@ -177,20 +194,77 @@ class ForkPipeRunner : public google::protobuf::ConformanceTestRunner {
   int read_fd_;
   bool running_;
   std::string executable_;
+  std::string current_test_name_;
 };
 
+void UsageError() {
+  fprintf(stderr,
+          "Usage: conformance-test-runner [options] <test-program>\n");
+  fprintf(stderr, "\n");
+  fprintf(stderr, "Options:\n");
+  fprintf(stderr,
+          "  --failure_list <filename>   Use to specify list of tests\n");
+  fprintf(stderr,
+          "                              that are expected to fail.  File\n");
+  fprintf(stderr,
+          "                              should contain one test name per\n");
+  fprintf(stderr,
+          "                              line.  Use '#' for comments.\n");
+  exit(1);
+}
 
-int main(int argc, char *argv[]) {
-  if (argc < 2) {
-    fprintf(stderr, "Usage: conformance-test-runner <test-program>\n");
+void ParseFailureList(const char *filename, vector<string>* failure_list) {
+  std::ifstream infile(filename);
+
+  if (!infile.is_open()) {
+    fprintf(stderr, "Couldn't open failure list file: %s\n", filename);
     exit(1);
   }
 
-  ForkPipeRunner runner(argv[1]);
+  for (string line; getline(infile, line);) {
+    // Remove whitespace.
+    line.erase(std::remove_if(line.begin(), line.end(), ::isspace),
+               line.end());
+
+    // Remove comments.
+    line = line.substr(0, line.find("#"));
+
+    if (!line.empty()) {
+      failure_list->push_back(line);
+    }
+  }
+}
+
+int main(int argc, char *argv[]) {
+  char *program;
   google::protobuf::ConformanceTestSuite suite;
 
+  for (int arg = 1; arg < argc; ++arg) {
+    if (strcmp(argv[arg], "--failure_list") == 0) {
+      if (++arg == argc) UsageError();
+      vector<string> failure_list;
+      ParseFailureList(argv[arg], &failure_list);
+      suite.SetFailureList(failure_list);
+    } else if (strcmp(argv[arg], "--verbose") == 0) {
+      suite.SetVerbose(true);
+    } else if (argv[arg][0] == '-') {
+      fprintf(stderr, "Unknown option: %s\n", argv[arg]);
+      UsageError();
+    } else {
+      if (arg != argc - 1) {
+        fprintf(stderr, "Too many arguments.\n");
+        UsageError();
+      }
+      program = argv[arg];
+    }
+  }
+
+  ForkPipeRunner runner(program);
+
   std::string output;
-  suite.RunSuite(&runner, &output);
+  bool ok = suite.RunSuite(&runner, &output);
 
   fwrite(output.c_str(), 1, output.size(), stderr);
+
+  return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

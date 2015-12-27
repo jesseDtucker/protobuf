@@ -35,7 +35,6 @@
 #include <google/protobuf/compiler/cpp/cpp_enum_field.h>
 #include <google/protobuf/compiler/cpp/cpp_helpers.h>
 #include <google/protobuf/io/printer.h>
-#include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/stubs/strutil.h>
 
 namespace google {
@@ -242,7 +241,7 @@ void RepeatedEnumFieldGenerator::
 GeneratePrivateMembers(io::Printer* printer) const {
   printer->Print(variables_,
     "::google::protobuf::RepeatedField<int> $name$_;\n");
-  if (descriptor_->options().packed()
+  if (descriptor_->is_packed()
       && HasGeneratedMethods(descriptor_->file())) {
     printer->Print(variables_,
       "mutable int _$name$_cached_byte_size_;\n");
@@ -352,7 +351,7 @@ GenerateMergeFromCodedStream(io::Printer* printer) const {
 
 void RepeatedEnumFieldGenerator::
 GenerateMergeFromCodedStreamWithPacking(io::Printer* printer) const {
-  if (!descriptor_->options().packed()) {
+  if (!descriptor_->is_packed()) {
       // This path is rarely executed, so we use a non-inlined implementation.
     if (HasPreservingUnknownEnumSemantics(descriptor_->file())) {
       printer->Print(variables_,
@@ -419,7 +418,7 @@ GenerateMergeFromCodedStreamWithPacking(io::Printer* printer) const {
 
 void RepeatedEnumFieldGenerator::
 GenerateSerializeWithCachedSizes(io::Printer* printer) const {
-  if (descriptor_->options().packed()) {
+  if (descriptor_->is_packed()) {
     // Write the tag and the size.
     printer->Print(variables_,
       "if (this->$name$_size() > 0) {\n"
@@ -432,7 +431,7 @@ GenerateSerializeWithCachedSizes(io::Printer* printer) const {
   }
   printer->Print(variables_,
       "for (int i = 0; i < this->$name$_size(); i++) {\n");
-  if (descriptor_->options().packed()) {
+  if (descriptor_->is_packed()) {
     printer->Print(variables_,
       "  ::google::protobuf::internal::WireFormatLite::WriteEnumNoTag(\n"
       "    this->$name$(i), output);\n");
@@ -446,7 +445,7 @@ GenerateSerializeWithCachedSizes(io::Printer* printer) const {
 
 void RepeatedEnumFieldGenerator::
 GenerateSerializeWithCachedSizesToArray(io::Printer* printer) const {
-  if (descriptor_->options().packed()) {
+  if (descriptor_->is_packed()) {
     // Write the tag and the size.
     printer->Print(variables_,
       "if (this->$name$_size() > 0) {\n"
@@ -460,7 +459,7 @@ GenerateSerializeWithCachedSizesToArray(io::Printer* printer) const {
   }
   printer->Print(variables_,
       "for (int i = 0; i < this->$name$_size(); i++) {\n");
-  if (descriptor_->options().packed()) {
+  if (descriptor_->is_packed()) {
     printer->Print(variables_,
       "  target = ::google::protobuf::internal::WireFormatLite::WriteEnumNoTagToArray(\n"
       "    this->$name$(i), target);\n");
@@ -484,7 +483,7 @@ GenerateByteSize(io::Printer* printer) const {
       "    this->$name$(i));\n"
       "}\n");
 
-  if (descriptor_->options().packed()) {
+  if (descriptor_->is_packed()) {
     printer->Print(variables_,
       "if (data_size > 0) {\n"
       "  total_size += $tag_size$ +\n"

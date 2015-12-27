@@ -323,7 +323,7 @@ class LIBPROTOBUF_EXPORT Parser {
                          const LocationRecorder& service_location,
                          const FileDescriptorProto* containing_file);
 
-  // Parse one statement within a message, enum, or service block, inclunding
+  // Parse one statement within a message, enum, or service block, including
   // final semicolon.
   bool ParseMessageStatement(DescriptorProto* message,
                              const LocationRecorder& message_location,
@@ -363,6 +363,14 @@ class LIBPROTOBUF_EXPORT Parser {
   bool ParseExtensions(DescriptorProto* message,
                        const LocationRecorder& extensions_location,
                        const FileDescriptorProto* containing_file);
+
+  // Parse a "reserved" declaration.
+  bool ParseReserved(DescriptorProto* message,
+                     const LocationRecorder& message_location);
+  bool ParseReservedNames(DescriptorProto* message,
+                          const LocationRecorder& parent_location);
+  bool ParseReservedNumbers(DescriptorProto* message,
+                            const LocationRecorder& parent_location);
 
   // Parse an "extend" declaration.  (See also comments for
   // ParseMessageField().)
@@ -407,7 +415,7 @@ class LIBPROTOBUF_EXPORT Parser {
                           Message* mutable_options);
 
   // Parse "required", "optional", or "repeated" and fill in "label"
-  // with the value. Returns true if shuch a label is consumed.
+  // with the value. Returns true if such a label is consumed.
   bool ParseLabel(FieldDescriptorProto::Label* label,
                   const FileDescriptorProto* containing_file);
 
@@ -430,6 +438,10 @@ class LIBPROTOBUF_EXPORT Parser {
   bool ParseDefaultAssignment(FieldDescriptorProto* field,
                               const LocationRecorder& field_location,
                               const FileDescriptorProto* containing_file);
+
+  bool ParseJsonName(FieldDescriptorProto* field,
+                     const LocationRecorder& field_location,
+                     const FileDescriptorProto* containing_file);
 
   enum OptionStyle {
     OPTION_ASSIGNMENT,  // just "name = value"
@@ -485,6 +497,8 @@ class LIBPROTOBUF_EXPORT Parser {
     return syntax_identifier_ == "proto3";
   }
 
+
+  bool ValidateEnum(const EnumDescriptorProto* proto);
 
   // =================================================================
 

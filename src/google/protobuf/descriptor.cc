@@ -34,6 +34,10 @@
 
 #include <google/protobuf/stubs/hash.h>
 #include <map>
+#include <memory>
+#ifndef _SHARED_PTR_H
+#include <google/protobuf/stubs/shared_ptr.h>
+#endif
 #include <set>
 #include <string>
 #include <vector>
@@ -53,6 +57,8 @@
 #include <google/protobuf/io/tokenizer.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/stubs/common.h>
+#include <google/protobuf/stubs/logging.h>
+#include <google/protobuf/stubs/mutex.h>
 #include <google/protobuf/stubs/once.h>
 #include <google/protobuf/stubs/stringprintf.h>
 #include <google/protobuf/stubs/strutil.h>
@@ -150,7 +156,7 @@ const char* FileDescriptor::SyntaxName(FileDescriptor::Syntax syntax) {
 
 static const char * const kNonLinkedWeakMessageReplacementName = "google.protobuf.Empty";
 
-#ifndef _MSC_VER  // MSVC doesn't need these and won't even accept them.
+#if !defined(_MSC_VER) || _MSC_VER >= 1900
 const int FieldDescriptor::kMaxNumber;
 const int FieldDescriptor::kFirstReservedNumber;
 const int FieldDescriptor::kLastReservedNumber;
@@ -1092,6 +1098,7 @@ const DescriptorPool* DescriptorPool::generated_pool() {
   return generated_pool_;
 }
 
+
 DescriptorPool* DescriptorPool::internal_generated_pool() {
   InitGeneratedPoolOnce();
   return generated_pool_;
@@ -1518,6 +1525,18 @@ Descriptor::FindExtensionRangeContainingNumber(int number) const {
   return NULL;
 }
 
+const Descriptor::ReservedRange*
+Descriptor::FindReservedRangeContainingNumber(int number) const {
+  // TODO(chrisn): Consider a non-linear search.
+  for (int i = 0; i < reserved_range_count(); i++) {
+    if (number >= reserved_range(i)->start &&
+        number <  reserved_range(i)->end) {
+      return reserved_range(i);
+    }
+  }
+  return NULL;
+}
+
 // -------------------------------------------------------------------
 
 bool DescriptorPool::TryFindFileInFallbackDatabase(const string& name) const {
@@ -1711,6 +1730,20 @@ void FileDescriptor::CopyTo(FileDescriptorProto* proto) const {
   }
 }
 
+void FileDescriptor::CopyJsonNameTo(FileDescriptorProto* proto) const {
+  if (message_type_count() != proto->message_type_size() ||
+      extension_count() != proto->extension_size()) {
+    GOOGLE_LOG(ERROR) << "Cannot copy json_name to a proto of a different size.";
+    return;
+  }
+  for (int i = 0; i < message_type_count(); i++) {
+    message_type(i)->CopyJsonNameTo(proto->mutable_message_type(i));
+  }
+  for (int i = 0; i < extension_count(); i++) {
+    extension(i)->CopyJsonNameTo(proto->mutable_extension(i));
+  }
+}
+
 void FileDescriptor::CopySourceCodeInfoTo(FileDescriptorProto* proto) const {
   if (source_code_info_ &&
       source_code_info_ != &SourceCodeInfo::default_instance()) {
@@ -1741,15 +1774,44 @@ void Descriptor::CopyTo(DescriptorProto* proto) const {
   for (int i = 0; i < extension_count(); i++) {
     extension(i)->CopyTo(proto->add_extension());
   }
+  for (int i = 0; i < reserved_range_count(); i++) {
+    DescriptorProto::ReservedRange* range = proto->add_reserved_range();
+    range->set_start(reserved_range(i)->start);
+    range->set_end(reserved_range(i)->end);
+  }
+  for (int i = 0; i < reserved_name_count(); i++) {
+    proto->add_reserved_name(reserved_name(i));
+  }
 
   if (&options() != &MessageOptions::default_instance()) {
     proto->mutable_options()->CopyFrom(options());
   }
 }
 
+void Descriptor::CopyJsonNameTo(DescriptorProto* proto) const {
+  if (field_count() != proto->field_size() ||
+      nested_type_count() != proto->nested_type_size() ||
+      extension_count() != proto->extension_size()) {
+    GOOGLE_LOG(ERROR) << "Cannot copy json_name to a proto of a different size.";
+    return;
+  }
+  for (int i = 0; i < field_count(); i++) {
+    field(i)->CopyJsonNameTo(proto->mutable_field(i));
+  }
+  for (int i = 0; i < nested_type_count(); i++) {
+    nested_type(i)->CopyJsonNameTo(proto->mutable_nested_type(i));
+  }
+  for (int i = 0; i < extension_count(); i++) {
+    extension(i)->CopyJsonNameTo(proto->mutable_extension(i));
+  }
+}
+
 void FieldDescriptor::CopyTo(FieldDescriptorProto* proto) const {
   proto->set_name(name());
   proto->set_number(number());
+  if (has_json_name_) {
+    proto->set_json_name(json_name());
+  }
 
   // Some compilers do not allow static_cast directly between two enum types,
   // so we must cast to int first.
@@ -1794,6 +1856,10 @@ void FieldDescriptor::CopyTo(FieldDescriptorProto* proto) const {
   if (&options() != &FieldOptions::default_instance()) {
     proto->mutable_options()->CopyFrom(options());
   }
+}
+
+void FieldDescriptor::CopyJsonNameTo(FieldDescriptorProto* proto) const {
+  proto->set_json_name(json_name());
 }
 
 void OneofDescriptor::CopyTo(OneofDescriptorProto* proto) const {
@@ -1984,6 +2050,7 @@ class SourceLocationCommentPrinter {
   }
 
  private:
+
   bool have_source_loc_;
   SourceLocation source_loc_;
   DebugStringOptions options_;
@@ -2186,6 +2253,29 @@ void Descriptor::DebugString(int depth, string *contents,
   if (extension_count() > 0)
     strings::SubstituteAndAppend(contents, "$0  }\n", prefix);
 
+  if (reserved_range_count() > 0) {
+    strings::SubstituteAndAppend(contents, "$0  reserved ", prefix);
+    for (int i = 0; i < reserved_range_count(); i++) {
+      const Descriptor::ReservedRange* range = reserved_range(i);
+      if (range->end == range->start + 1) {
+        strings::SubstituteAndAppend(contents, "$0, ", range->start);
+      } else {
+        strings::SubstituteAndAppend(contents, "$0 to $1, ",
+                                     range->start, range->end - 1);
+      }
+    }
+    contents->replace(contents->size() - 2, 2, ";\n");
+  }
+
+  if (reserved_name_count() > 0) {
+    strings::SubstituteAndAppend(contents, "$0  reserved ", prefix);
+    for (int i = 0; i < reserved_name_count(); i++) {
+      strings::SubstituteAndAppend(contents, "\"$0\", ",
+                                   CEscape(reserved_name(i)));
+    }
+    contents->replace(contents->size() - 2, 2, ";\n");
+  }
+
   strings::SubstituteAndAppend(contents, "$0}\n", prefix);
   comment_printer.AddPostComment(contents);
 }
@@ -2278,8 +2368,12 @@ void FieldDescriptor::DebugString(int depth,
   }
 
   if (type() == TYPE_GROUP) {
-    message_type()->DebugString(depth, contents, debug_string_options,
-                                /* include_opening_clause */ false);
+    if (debug_string_options.elide_group_body) {
+      contents->append(" { ... };\n");
+    } else {
+      message_type()->DebugString(depth, contents, debug_string_options,
+                                  /* include_opening_clause */ false);
+    }
   } else {
     contents->append(";\n");
   }
@@ -2308,12 +2402,16 @@ void OneofDescriptor::DebugString(int depth, string* contents,
       comment_printer(this, prefix, debug_string_options);
   comment_printer.AddPreComment(contents);
   strings::SubstituteAndAppend(
-      contents, "$0 oneof $1 {\n", prefix, name());
-  for (int i = 0; i < field_count(); i++) {
-    field(i)->DebugString(depth, FieldDescriptor::OMIT_LABEL, contents,
-                          debug_string_options);
+      contents, "$0 oneof $1 {", prefix, name());
+  if (debug_string_options.elide_oneof_body) {
+    contents->append(" ... }\n");
+  } else {
+    for (int i = 0; i < field_count(); i++) {
+      field(i)->DebugString(depth, FieldDescriptor::OMIT_LABEL, contents,
+                            debug_string_options);
+    }
+    strings::SubstituteAndAppend(contents, "$0}\n", prefix);
   }
-  strings::SubstituteAndAppend(contents, "$0}\n", prefix);
   comment_printer.AddPostComment(contents);
 }
 
@@ -2491,7 +2589,12 @@ bool FileDescriptor::GetSourceLocation(SourceLocation* out_location) const {
 }
 
 bool FieldDescriptor::is_packed() const {
-  return is_packable() && (options_ != NULL) && options_->packed();
+  if (!is_packable()) return false;
+  if (file_->syntax() == FileDescriptor::SYNTAX_PROTO2) {
+    return (options_ != NULL) && options_->packed();
+  } else {
+    return options_ == NULL || !options_->has_packed() || options_->packed();
+  }
 }
 
 bool Descriptor::GetSourceLocation(SourceLocation* out_location) const {
@@ -2604,7 +2707,7 @@ void MethodDescriptor::GetLocationPath(vector<int>* output) const {
 namespace {
 
 // Represents an options message to interpret. Extension names in the option
-// name are respolved relative to name_scope. element_name and orig_opt are
+// name are resolved relative to name_scope. element_name and orig_opt are
 // used only for error reporting (since the parser records locations against
 // pointers in the original options, not the mutable copy). The Message must be
 // one of the Options messages in descriptor.proto.
@@ -2830,6 +2933,9 @@ class DescriptorBuilder {
   void BuildExtensionRange(const DescriptorProto::ExtensionRange& proto,
                            const Descriptor* parent,
                            Descriptor::ExtensionRange* result);
+  void BuildReservedRange(const DescriptorProto::ReservedRange& proto,
+                           const Descriptor* parent,
+                           Descriptor::ReservedRange* result);
   void BuildOneof(const OneofDescriptorProto& proto,
                   Descriptor* parent,
                   OneofDescriptor* result);
@@ -2846,7 +2952,8 @@ class DescriptorBuilder {
                    const ServiceDescriptor* parent,
                    MethodDescriptor* result);
 
-  void LogUnusedDependency(const FileDescriptor* result);
+  void LogUnusedDependency(const FileDescriptorProto& proto,
+                           const FileDescriptor* result);
 
   // Must be run only after building.
   //
@@ -3640,6 +3747,14 @@ static bool ExistingFileMatchesProto(const FileDescriptor* existing_file,
                                      const FileDescriptorProto& proto) {
   FileDescriptorProto existing_proto;
   existing_file->CopyTo(&existing_proto);
+  // TODO(liujisi): Remove it when CopyTo supports copying syntax params when
+  // syntax="proto2".
+  if (existing_file->syntax() == FileDescriptor::SYNTAX_PROTO2 &&
+      proto.has_syntax()) {
+    existing_proto.set_syntax(
+        existing_file->SyntaxName(existing_file->syntax()));
+  }
+
   return existing_proto.SerializeAsString() == proto.SerializeAsString();
 }
 
@@ -3883,7 +3998,7 @@ const FileDescriptor* DescriptorBuilder::BuildFile(
 
 
   if (!unused_dependency_.empty()) {
-    LogUnusedDependency(result);
+    LogUnusedDependency(proto, result);
   }
 
   if (had_errors_) {
@@ -3920,6 +4035,17 @@ void DescriptorBuilder::BuildMessage(const DescriptorProto& proto,
   BUILD_ARRAY(proto, result, enum_type      , BuildEnum          , result);
   BUILD_ARRAY(proto, result, extension_range, BuildExtensionRange, result);
   BUILD_ARRAY(proto, result, extension      , BuildExtension     , result);
+  BUILD_ARRAY(proto, result, reserved_range , BuildReservedRange , result);
+
+  // Copy reserved names.
+  int reserved_name_count = proto.reserved_name_size();
+  result->reserved_name_count_ = reserved_name_count;
+  result->reserved_names_ =
+      tables_->AllocateArray<const string*>(reserved_name_count);
+  for (int i = 0; i < reserved_name_count; ++i) {
+    result->reserved_names_[i] =
+        tables_->AllocateString(proto.reserved_name(i));
+  }
 
   // Copy options.
   if (!proto.has_options()) {
@@ -3931,7 +4057,34 @@ void DescriptorBuilder::BuildMessage(const DescriptorProto& proto,
   AddSymbol(result->full_name(), parent, result->name(),
             proto, Symbol(result));
 
-  // Check that no fields have numbers in extension ranges.
+  for (int i = 0; i < proto.reserved_range_size(); i++) {
+    const DescriptorProto_ReservedRange& range1 = proto.reserved_range(i);
+    for (int j = i + 1; j < proto.reserved_range_size(); j++) {
+      const DescriptorProto_ReservedRange& range2 = proto.reserved_range(j);
+      if (range1.end() > range2.start() && range2.end() > range1.start()) {
+        AddError(result->full_name(), proto.reserved_range(i),
+                 DescriptorPool::ErrorCollector::NUMBER,
+                 strings::Substitute("Reserved range $0 to $1 overlaps with "
+                                     "already-defined range $2 to $3.",
+                                     range2.start(), range2.end() - 1,
+                                     range1.start(), range1.end() - 1));
+      }
+    }
+  }
+
+  hash_set<string> reserved_name_set;
+  for (int i = 0; i < proto.reserved_name_size(); i++) {
+    const string& name = proto.reserved_name(i);
+    if (reserved_name_set.find(name) == reserved_name_set.end()) {
+      reserved_name_set.insert(name);
+    } else {
+      AddError(name, proto, DescriptorPool::ErrorCollector::NAME,
+               strings::Substitute(
+                 "Field name \"$0\" is reserved multiple times.",
+                 name));
+    }
+  }
+
   for (int i = 0; i < result->field_count(); i++) {
     const FieldDescriptor* field = result->field(i);
     for (int j = 0; j < result->extension_range_count(); j++) {
@@ -3945,11 +4098,39 @@ void DescriptorBuilder::BuildMessage(const DescriptorProto& proto,
                    field->name(), field->number()));
       }
     }
+    for (int j = 0; j < result->reserved_range_count(); j++) {
+      const Descriptor::ReservedRange* range = result->reserved_range(j);
+      if (range->start <= field->number() && field->number() < range->end) {
+        AddError(field->full_name(), proto.reserved_range(j),
+                 DescriptorPool::ErrorCollector::NUMBER,
+                 strings::Substitute(
+                   "Field \"$0\" uses reserved number $1.",
+                   field->name(), field->number()));
+      }
+    }
+    if (reserved_name_set.find(field->name()) != reserved_name_set.end()) {
+      AddError(field->full_name(), proto.field(i),
+               DescriptorPool::ErrorCollector::NAME,
+               strings::Substitute(
+                 "Field name \"$0\" is reserved.", field->name()));
+    }
   }
 
-  // Check that extension ranges don't overlap.
+  // Check that extension ranges don't overlap and don't include
+  // reserved field numbers.
   for (int i = 0; i < result->extension_range_count(); i++) {
     const Descriptor::ExtensionRange* range1 = result->extension_range(i);
+    for (int j = 0; j < result->reserved_range_count(); j++) {
+      const Descriptor::ReservedRange* range2 = result->reserved_range(j);
+      if (range1->end > range2->start && range2->end > range1->start) {
+        AddError(result->full_name(), proto.extension_range(j),
+                 DescriptorPool::ErrorCollector::NUMBER,
+                 strings::Substitute("Extension range $0 to $1 overlaps with "
+                                     "reserved range $2 to $3.",
+                                     range1->start, range1->end - 1,
+                                     range2->start, range2->end - 1));
+      }
+    }
     for (int j = i + 1; j < result->extension_range_count(); j++) {
       const Descriptor::ExtensionRange* range2 = result->extension_range(j);
       if (range1->end > range2->start && range2->end > range1->start) {
@@ -3963,6 +4144,7 @@ void DescriptorBuilder::BuildMessage(const DescriptorProto& proto,
     }
   }
 }
+
 
 void DescriptorBuilder::BuildFieldOrExtension(const FieldDescriptorProto& proto,
                                               const Descriptor* parent,
@@ -3999,6 +4181,14 @@ void DescriptorBuilder::BuildFieldOrExtension(const FieldDescriptorProto& proto,
   result->camelcase_name_ =
       tables_->AllocateString(ToCamelCase(proto.name(),
                                           /* lower_first = */ true));
+
+  if (proto.has_json_name()) {
+    result->has_json_name_ = true;
+    result->json_name_ = tables_->AllocateString(proto.json_name());
+  } else {
+    result->has_json_name_ = false;
+    result->json_name_ = result->camelcase_name_;
+  }
 
   // Some compilers do not allow static_cast directly between two enum types,
   // so we must cast to int first.
@@ -4061,8 +4251,8 @@ void DescriptorBuilder::BuildFieldOrExtension(const FieldDescriptorProto& proto,
           } else if (proto.default_value() == "nan") {
             result->default_value_float_ = numeric_limits<float>::quiet_NaN();
           } else  {
-            result->default_value_float_ =
-              io::NoLocaleStrtod(proto.default_value().c_str(), &end_pos);
+            result->default_value_float_ = io::SafeDoubleToFloat(
+                io::NoLocaleStrtod(proto.default_value().c_str(), &end_pos));
           }
           break;
         case FieldDescriptor::CPPTYPE_DOUBLE:
@@ -4234,6 +4424,7 @@ void DescriptorBuilder::BuildFieldOrExtension(const FieldDescriptorProto& proto,
     AllocateOptions(proto.options(), result);
   }
 
+
   AddSymbol(result->full_name(), parent, result->name(),
             proto, Symbol(result));
 }
@@ -4259,6 +4450,19 @@ void DescriptorBuilder::BuildExtensionRange(
     AddError(parent->full_name(), proto,
              DescriptorPool::ErrorCollector::NUMBER,
              "Extension range end number must be greater than start number.");
+  }
+}
+
+void DescriptorBuilder::BuildReservedRange(
+    const DescriptorProto::ReservedRange& proto,
+    const Descriptor* parent,
+    Descriptor::ReservedRange* result) {
+  result->start = proto.start();
+  result->end = proto.end();
+  if (result->start <= 0) {
+    AddError(parent->full_name(), proto,
+             DescriptorPool::ErrorCollector::NUMBER,
+             "Reserved numbers must be positive integers.");
   }
 }
 
@@ -4503,6 +4707,23 @@ void DescriptorBuilder::CrossLinkMessage(
   for (int i = 0; i < message->field_count(); i++) {
     const OneofDescriptor* oneof_decl = message->field(i)->containing_oneof();
     if (oneof_decl != NULL) {
+      // Make sure fields belonging to the same oneof are defined consecutively.
+      // This enables optimizations in codegens and reflection libraries to
+      // skip fields in the oneof group, as only one of the field can be set.
+      // Note that field_count() returns how many fields in this oneof we have
+      // seen so far. field_count() > 0 guarantees that i > 0, so field(i-1) is
+      // safe.
+      if (oneof_decl->field_count() > 0 &&
+          message->field(i - 1)->containing_oneof() != oneof_decl) {
+        AddError(
+            message->full_name() + "." + message->field(i - 1)->name(),
+            proto.field(i - 1), DescriptorPool::ErrorCollector::OTHER,
+            strings::Substitute(
+                "Fields in the same oneof must be defined consecutively. "
+                "\"$0\" cannot be defined before the completion of the "
+                "\"$1\" oneof definition.",
+                message->field(i - 1)->name(), oneof_decl->name()));
+      }
       // Must go through oneof_decls_ array to get a non-const version of the
       // OneofDescriptor.
       ++message->oneof_decls_[oneof_decl->index()].field_count_;
@@ -4874,6 +5095,20 @@ void DescriptorBuilder::ValidateProto3(
   }
 }
 
+static string ToLowercaseWithoutUnderscores(const string& name) {
+  string result;
+  for (int i = 0; i < name.size(); ++i) {
+    if (name[i] != '_') {
+      if (name[i] >= 'A' && name[i] <= 'Z') {
+        result.push_back(name[i] - 'A' + 'a');
+      } else {
+        result.push_back(name[i]);
+      }
+    }
+  }
+  return result;
+}
+
 void DescriptorBuilder::ValidateProto3Message(
     Descriptor* message, const DescriptorProto& proto) {
   for (int i = 0; i < message->nested_type_count(); ++i) {
@@ -4900,6 +5135,25 @@ void DescriptorBuilder::ValidateProto3Message(
     AddError(message->full_name(), proto,
              DescriptorPool::ErrorCollector::OTHER,
              "MessageSet is not supported in proto3.");
+  }
+
+  // In proto3, we reject field names if they conflict in camelCase.
+  // Note that we currently enforce a stricter rule: Field names must be
+  // unique after being converted to lowercase with underscores removed.
+  map<string, const FieldDescriptor*> name_to_field;
+  for (int i = 0; i < message->field_count(); ++i) {
+    string lowercase_name = ToLowercaseWithoutUnderscores(
+        message->field(i)->name());
+    if (name_to_field.find(lowercase_name) != name_to_field.end()) {
+      AddError(message->full_name(), proto,
+               DescriptorPool::ErrorCollector::OTHER,
+               "The JSON camcel-case name of field \"" +
+               message->field(i)->name() + "\" conflicts with field \"" +
+               name_to_field[lowercase_name]->name() + "\". This is not " +
+               "allowed in proto3.");
+    } else {
+      name_to_field[lowercase_name] = message->field(i);
+    }
   }
 }
 
@@ -4932,6 +5186,11 @@ void DescriptorBuilder::ValidateProto3Field(
              "\" is not a proto3 enum, but is used in \"" +
              field->containing_type()->full_name() +
              "\" which is a proto3 message type.");
+  }
+  if (field->type() == FieldDescriptor::TYPE_GROUP) {
+    AddError(field->full_name(), proto,
+             DescriptorPool::ErrorCollector::TYPE,
+             "Groups are not supported in proto3 syntax.");
   }
 }
 
@@ -5146,6 +5405,14 @@ bool DescriptorBuilder::ValidateMapEntry(FieldDescriptor* field,
     // are added.
   }
 
+  if (value->type() == FieldDescriptor::TYPE_ENUM) {
+    if (value->enum_type()->value(0)->number() != 0) {
+      AddError(
+          field->full_name(), proto, DescriptorPool::ErrorCollector::TYPE,
+          "Enum value in map must define 0 as the first value.");
+    }
+  }
+
   return true;
 }
 
@@ -5270,11 +5537,19 @@ bool DescriptorBuilder::OptionInterpreter::InterpretOptions(
     // UnknownFieldSet and wait there until the message is parsed by something
     // that does know about the options.
     string buf;
-    options->AppendToString(&buf);
-    GOOGLE_CHECK(options->ParseFromString(buf))
+    GOOGLE_CHECK(options->AppendPartialToString(&buf))
+        << "Protocol message could not be serialized.";
+    GOOGLE_CHECK(options->ParsePartialFromString(buf))
         << "Protocol message serialized itself in invalid fashion.";
+    if (!options->IsInitialized()) {
+      builder_->AddWarning(
+          options_to_interpret->element_name, *original_options,
+          DescriptorPool::ErrorCollector::OTHER,
+          "Options could not be fully parsed using the proto descriptors "
+          "compiled into this binary. Missing required fields: " +
+          options->InitializationErrorString());
+    }
   }
-
   return !failed;
 }
 
@@ -5423,7 +5698,7 @@ bool DescriptorBuilder::OptionInterpreter::InterpretSingleOption(
 
   // First set the value on the UnknownFieldSet corresponding to the
   // innermost message.
-  scoped_ptr<UnknownFieldSet> unknown_fields(new UnknownFieldSet());
+  google::protobuf::scoped_ptr<UnknownFieldSet> unknown_fields(new UnknownFieldSet());
   if (!SetOptionValue(field, unknown_fields.get())) {
     return false;  // SetOptionValue() already added the error.
   }
@@ -5433,7 +5708,8 @@ bool DescriptorBuilder::OptionInterpreter::InterpretSingleOption(
   for (vector<const FieldDescriptor*>::reverse_iterator iter =
            intermediate_fields.rbegin();
        iter != intermediate_fields.rend(); ++iter) {
-    scoped_ptr<UnknownFieldSet> parent_unknown_fields(new UnknownFieldSet());
+    google::protobuf::scoped_ptr<UnknownFieldSet> parent_unknown_fields(
+        new UnknownFieldSet());
     switch ((*iter)->type()) {
       case FieldDescriptor::TYPE_MESSAGE: {
         io::StringOutputStream outstr(
@@ -5819,7 +6095,7 @@ bool DescriptorBuilder::OptionInterpreter::SetAggregateOption(
   }
 
   const Descriptor* type = option_field->message_type();
-  scoped_ptr<Message> dynamic(dynamic_factory_.GetPrototype(type)->New());
+  google::protobuf::scoped_ptr<Message> dynamic(dynamic_factory_.GetPrototype(type)->New());
   GOOGLE_CHECK(dynamic.get() != NULL)
       << "Could not create an instance of " << option_field->DebugString();
 
@@ -5927,7 +6203,8 @@ void DescriptorBuilder::OptionInterpreter::SetUInt64(int number, uint64 value,
   }
 }
 
-void DescriptorBuilder::LogUnusedDependency(const FileDescriptor* result) {
+void DescriptorBuilder::LogUnusedDependency(const FileDescriptorProto& proto,
+                                            const FileDescriptor* result) {
 
   if (!unused_dependency_.empty()) {
     std::set<string> annotation_extensions;
@@ -5953,9 +6230,9 @@ void DescriptorBuilder::LogUnusedDependency(const FileDescriptor* result) {
       }
       // Log warnings for unused imported files.
       if (i == (*it)->extension_count()) {
-        GOOGLE_LOG(WARNING) << "Warning: Unused import: \"" << result->name()
-                     << "\" imports \"" << (*it)->name()
-                     << "\" which is not used.";
+        string error_message = "Import " + (*it)->name() + " but not used.";
+        AddWarning((*it)->name(), proto, DescriptorPool::ErrorCollector::OTHER,
+                   error_message);
       }
     }
   }

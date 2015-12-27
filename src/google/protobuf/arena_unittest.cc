@@ -30,8 +30,6 @@
 
 #include <google/protobuf/arena.h>
 
-#include <stdint.h>
-
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -39,19 +37,25 @@
 #include <google/protobuf/stubs/shared_ptr.h>
 #endif
 #include <string>
+#include <typeinfo>
 #include <vector>
 
+#include <google/protobuf/stubs/logging.h>
 #include <google/protobuf/stubs/common.h>
+#include <google/protobuf/stubs/scoped_ptr.h>
 #include <google/protobuf/arena_test_util.h>
 #include <google/protobuf/test_util.h>
 #include <google/protobuf/unittest.pb.h>
 #include <google/protobuf/unittest_arena.pb.h>
 #include <google/protobuf/unittest_no_arena.pb.h>
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl_lite.h>
 #include <google/protobuf/descriptor.h>
 #include <google/protobuf/extension_set.h>
 #include <google/protobuf/message.h>
 #include <google/protobuf/message_lite.h>
 #include <google/protobuf/repeated_field.h>
+#include <google/protobuf/wire_format_lite.h>
 #include <google/protobuf/unknown_field_set.h>
 #include <gtest/gtest.h>
 
@@ -125,6 +129,29 @@ class MustBeConstructedWithOneThroughFour {
   GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MustBeConstructedWithOneThroughFour);
 };
 
+// A class that takes eight different types as constructor arguments.
+class MustBeConstructedWithOneThroughEight {
+ public:
+  MustBeConstructedWithOneThroughEight(
+      int one, const char* two, const string& three,
+      const PleaseDontCopyMe* four, int five, const char* six,
+      const string& seven, const string& eight)
+      : one_(one), two_(two), three_(three), four_(four), five_(five),
+        six_(six), seven_(seven), eight_(eight) {}
+
+  int one_;
+  const char* const two_;
+  string three_;
+  const PleaseDontCopyMe* four_;
+  int five_;
+  const char* const six_;
+  string seven_;
+  string eight_;
+
+ private:
+  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MustBeConstructedWithOneThroughEight);
+};
+
 }  // namespace
 
 TEST(ArenaTest, ArenaConstructable) {
@@ -156,7 +183,7 @@ TEST(ArenaTest, BasicCreate) {
   EXPECT_EQ(2, notifier.GetCount());
 }
 
-TEST(ArenaTest, CreateWithManyConstructorArguments) {
+TEST(ArenaTest, CreateWithFourConstructorArguments) {
   Arena arena;
   const string three("3");
   const PleaseDontCopyMe four(4);
@@ -168,6 +195,26 @@ TEST(ArenaTest, CreateWithManyConstructorArguments) {
   ASSERT_STREQ("2", new_object->two_);
   ASSERT_EQ("3", new_object->three_);
   ASSERT_EQ(4, new_object->four_->value());
+}
+
+TEST(ArenaTest, CreateWithEightConstructorArguments) {
+  Arena arena;
+  const string three("3");
+  const PleaseDontCopyMe four(4);
+  const string seven("7");
+  const string eight("8");
+  const MustBeConstructedWithOneThroughEight* new_object =
+      Arena::Create<MustBeConstructedWithOneThroughEight>(
+          &arena, 1, "2", three, &four, 5, "6", seven, eight);
+  EXPECT_TRUE(new_object != NULL);
+  ASSERT_EQ(1, new_object->one_);
+  ASSERT_STREQ("2", new_object->two_);
+  ASSERT_EQ("3", new_object->three_);
+  ASSERT_EQ(4, new_object->four_->value());
+  ASSERT_EQ(5, new_object->five_);
+  ASSERT_STREQ("6", new_object->six_);
+  ASSERT_EQ("7", new_object->seven_);
+  ASSERT_EQ("8", new_object->eight_);
 }
 
 TEST(ArenaTest, InitialBlockTooSmall) {
@@ -315,7 +362,7 @@ TEST(ArenaTest, ReleaseMessage) {
   Arena arena;
   TestAllTypes* arena_message = Arena::CreateMessage<TestAllTypes>(&arena);
   arena_message->mutable_optional_nested_message()->set_bb(118);
-  scoped_ptr<TestAllTypes::NestedMessage> nested(
+  google::protobuf::scoped_ptr<TestAllTypes::NestedMessage> nested(
       arena_message->release_optional_nested_message());
   EXPECT_EQ(118, nested->bb());
 
@@ -336,7 +383,7 @@ TEST(ArenaTest, ReleaseString) {
   Arena arena;
   TestAllTypes* arena_message = Arena::CreateMessage<TestAllTypes>(&arena);
   arena_message->set_optional_string("hello");
-  scoped_ptr<string> released_str(
+  google::protobuf::scoped_ptr<string> released_str(
       arena_message->release_optional_string());
   EXPECT_EQ("hello", *released_str);
 
@@ -574,8 +621,6 @@ TEST(ArenaTest, RepeatedPtrFieldAddClearedTest) {
   }
 }
 
-// N.B.: no reflection version of this test because all the arena-specific code
-// is in RepeatedPtrField, and the reflection works implicitly based on that.
 TEST(ArenaTest, AddAllocatedToRepeatedField) {
   // Heap->arena case.
   Arena arena1;
@@ -633,6 +678,55 @@ TEST(ArenaTest, AddAllocatedToRepeatedField) {
     EXPECT_EQ(s, &arena1_message->repeated_string(i));
     EXPECT_EQ("Test", arena1_message->repeated_string(i));
   }
+}
+
+TEST(ArenaTest, AddAllocatedToRepeatedFieldViaReflection) {
+  // Heap->arena case.
+  Arena arena1;
+  TestAllTypes* arena1_message = Arena::CreateMessage<TestAllTypes>(&arena1);
+  const Reflection* r = arena1_message->GetReflection();
+  const Descriptor* d = arena1_message->GetDescriptor();
+  const FieldDescriptor* fd =
+      d->FindFieldByName("repeated_nested_message");
+  for (int i = 0; i < 10; i++) {
+    TestAllTypes::NestedMessage* heap_submessage =
+        new TestAllTypes::NestedMessage;
+    heap_submessage->set_bb(42);
+    r->AddAllocatedMessage(arena1_message, fd, heap_submessage);
+    // Should not copy object -- will use arena_->Own().
+    EXPECT_EQ(heap_submessage,
+              &arena1_message->repeated_nested_message(i));
+    EXPECT_EQ(42, arena1_message->repeated_nested_message(i).bb());
+  }
+
+  // Arena1->Arena2 case.
+  arena1_message->Clear();
+  for (int i = 0; i < 10; i++) {
+    Arena arena2;
+    TestAllTypes::NestedMessage* arena2_submessage =
+        Arena::CreateMessage<TestAllTypes::NestedMessage>(&arena2);
+    arena2_submessage->set_bb(42);
+    r->AddAllocatedMessage(arena1_message, fd, arena2_submessage);
+    // Should copy object.
+    EXPECT_NE(arena2_submessage,
+              &arena1_message->repeated_nested_message(i));
+    EXPECT_EQ(42, arena1_message->repeated_nested_message(i).bb());
+  }
+
+  // Arena->heap case.
+  TestAllTypes* heap_message = new TestAllTypes;
+  for (int i = 0; i < 10; i++) {
+    Arena arena2;
+    TestAllTypes::NestedMessage* arena2_submessage =
+        Arena::CreateMessage<TestAllTypes::NestedMessage>(&arena2);
+    arena2_submessage->set_bb(42);
+    r->AddAllocatedMessage(heap_message, fd, arena2_submessage);
+    // Should copy object.
+    EXPECT_NE(arena2_submessage,
+              &heap_message->repeated_nested_message(i));
+    EXPECT_EQ(42, heap_message->repeated_nested_message(i).bb());
+  }
+  delete heap_message;
 }
 
 TEST(ArenaTest, ReleaseLastRepeatedField) {
@@ -1113,6 +1207,19 @@ TEST(ArenaTest, GetArenaShouldReturnNullForNonArenaAllocatedMessages) {
   EXPECT_EQ(NULL, Arena::GetArena(const_pointer_to_message));
 }
 
+TEST(ArenaTest, UnsafeSetAllocatedOnArena) {
+  ::google::protobuf::Arena arena;
+  TestAllTypes* message = Arena::CreateMessage<TestAllTypes>(&arena);
+  EXPECT_FALSE(message->has_optional_string());
+
+  string owned_string = "test with long enough content to heap-allocate";
+  message->unsafe_arena_set_allocated_optional_string(&owned_string);
+  EXPECT_TRUE(message->has_optional_string());
+
+  message->unsafe_arena_set_allocated_optional_string(NULL);
+  EXPECT_FALSE(message->has_optional_string());
+}
+
 // A helper utility class to only contain static hook functions, some
 // counters to be used to verify the counters have been called and a cookie
 // value to be verified.
@@ -1122,6 +1229,13 @@ class ArenaHooksTestUtil {
     ++num_init;
     int* cookie = new int(kCookieValue);
     return static_cast<void*>(cookie);
+  }
+
+  static void on_allocation(const std::type_info* /*unused*/, uint64 alloc_size,
+                            void* cookie) {
+    ++num_allocations;
+    int cookie_value = *static_cast<int*>(cookie);
+    EXPECT_EQ(kCookieValue, cookie_value);
   }
 
   static void on_reset(::google::protobuf::Arena* arena, void* cookie,
@@ -1141,10 +1255,12 @@ class ArenaHooksTestUtil {
 
   static const int kCookieValue = 999;
   static uint32 num_init;
+  static uint32 num_allocations;
   static uint32 num_reset;
   static uint32 num_destruct;
 };
 uint32 ArenaHooksTestUtil::num_init = 0;
+uint32 ArenaHooksTestUtil::num_allocations = 0;
 uint32 ArenaHooksTestUtil::num_reset = 0;
 uint32 ArenaHooksTestUtil::num_destruct = 0;
 const int ArenaHooksTestUtil::kCookieValue;
@@ -1153,6 +1269,7 @@ const int ArenaHooksTestUtil::kCookieValue;
 TEST(ArenaTest, ArenaHooksSanity) {
   ::google::protobuf::ArenaOptions options;
   options.on_arena_init = ArenaHooksTestUtil::on_init;
+  options.on_arena_allocation = ArenaHooksTestUtil::on_allocation;
   options.on_arena_reset = ArenaHooksTestUtil::on_reset;
   options.on_arena_destruction = ArenaHooksTestUtil::on_destruction;
 
@@ -1160,7 +1277,13 @@ TEST(ArenaTest, ArenaHooksSanity) {
   {
     ::google::protobuf::Arena arena(options);
     EXPECT_EQ(1, ArenaHooksTestUtil::num_init);
-
+    EXPECT_EQ(0, ArenaHooksTestUtil::num_allocations);
+    ::google::protobuf::Arena::Create<uint64>(&arena);
+    if (google::protobuf::internal::has_trivial_destructor<uint64>::value) {
+      EXPECT_EQ(1, ArenaHooksTestUtil::num_allocations);
+    } else {
+      EXPECT_EQ(2, ArenaHooksTestUtil::num_allocations);
+    }
     arena.Reset();
     arena.Reset();
     EXPECT_EQ(2, ArenaHooksTestUtil::num_reset);

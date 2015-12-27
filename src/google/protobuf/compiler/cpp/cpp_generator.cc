@@ -82,6 +82,7 @@ bool CppGenerator::Generate(const FileDescriptor* file,
   //   }
   // FOO_EXPORT is a macro which should expand to __declspec(dllexport) or
   // __declspec(dllimport) depending on what is being compiled.
+  //
   Options file_options;
 
   for (int i = 0; i < options.size(); i++) {
@@ -99,16 +100,23 @@ bool CppGenerator::Generate(const FileDescriptor* file,
 
 
   string basename = StripProto(file->name());
-  basename.append(".pb");
 
   FileGenerator file_generator(file, file_options);
 
-  // Generate header.
+  // Generate header(s).
+  if (file_options.proto_h) {
+    google::protobuf::scoped_ptr<io::ZeroCopyOutputStream> output(
+        generator_context->Open(basename + ".proto.h"));
+    io::Printer printer(output.get(), '$');
+    file_generator.GenerateProtoHeader(&printer);
+  }
+
+  basename.append(".pb");
   {
     google::protobuf::scoped_ptr<io::ZeroCopyOutputStream> output(
         generator_context->Open(basename + ".h"));
     io::Printer printer(output.get(), '$');
-    file_generator.GenerateHeader(&printer);
+    file_generator.GeneratePBHeader(&printer);
   }
 
   // Generate cc file.

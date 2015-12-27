@@ -32,7 +32,6 @@ package com.google.protobuf;
 
 import com.google.protobuf.Descriptors.FieldDescriptor;
 import com.google.protobuf.TextFormat.Parser.SingularOverwritePolicy;
-import protobuf_unittest.UnittestMset.TestMessageSet;
 import protobuf_unittest.UnittestMset.TestMessageSetExtension1;
 import protobuf_unittest.UnittestMset.TestMessageSetExtension2;
 import protobuf_unittest.UnittestProto.OneString;
@@ -41,6 +40,7 @@ import protobuf_unittest.UnittestProto.TestAllTypes;
 import protobuf_unittest.UnittestProto.TestAllTypes.NestedMessage;
 import protobuf_unittest.UnittestProto.TestEmptyMessage;
 import protobuf_unittest.UnittestProto.TestOneof2;
+import proto2_wireformat_unittest.UnittestMsetWireFormat.TestMessageSet;
 
 import junit.framework.TestCase;
 
@@ -828,6 +828,22 @@ public class TextFormatTest extends TestCase {
             .setOptionalNestedMessage(
                 NestedMessage.newBuilder().setBb(42).build())
             .build()));
+  }
+
+  public void testShortDebugString_field() {
+    final FieldDescriptor dataField =
+      OneString.getDescriptor().findFieldByName("data");
+    assertEquals(
+      "data: \"test data\"",
+      TextFormat.shortDebugString(dataField, "test data"));
+
+    final FieldDescriptor optionalField =
+      TestAllTypes.getDescriptor().findFieldByName("optional_nested_message");
+    final Object value = NestedMessage.newBuilder().setBb(42).build();
+
+    assertEquals(
+      "optional_nested_message { bb: 42 }",
+      TextFormat.shortDebugString(optionalField, value));
   }
 
   public void testShortDebugString_unknown() {

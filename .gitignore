@@ -19,7 +19,7 @@ m4/lt~obsolete.m4
 autom4te.cache
 
 # downloaded files
-gtest
+gmock
 
 # in-tree configure-generated files
 Makefile
@@ -27,7 +27,6 @@ src/Makefile
 /config.h
 config.log
 config.status
-pbconfig.h
 
 libtool
 protobuf-lite.pc
@@ -44,14 +43,19 @@ src/.libs
 
 .dirstamp
 
+any_test.pb.*
 map*unittest.pb.*
 unittest*.pb.*
 cpp_test*.pb.*
+src/google/protobuf/util/**/*.pb.cc
+src/google/protobuf/util/**/*.pb.h
 
 *.pyc
 *.egg-info
 *_pb2.py
+python/*.egg
 python/.eggs/
+python/.tox
 python/build/
 python/google/protobuf/compiler/
 
@@ -75,19 +79,36 @@ src/**/*.trs
 java/target
 javanano/target
 
-# VS files
-*.sdf
-*.opensdf
-*.filters
-*.suo
-*.user
+# Windows native output.
+cmake/build
+build_msvc
 
-# Output files
-*.obj
-*.lib
-*.exe
-*.tlog
-*.log
-*.idb
-*.pdb
-*.ilk
+# NuGet packages: we want the repository configuration, but not the
+# packages themselves.
+/csharp/src/packages/*/
+
+# Directories created by opening the Objective C Xcode projects.
+objectivec/ProtocolBuffers_OSX.xcodeproj/project.xcworkspace/xcuserdata/
+objectivec/ProtocolBuffers_OSX.xcodeproj/project.xcworkspace/xcshareddata/ProtocolBuffers_OSX.xccheckout
+objectivec/ProtocolBuffers_OSX.xcodeproj/xcuserdata/
+objectivec/ProtocolBuffers_iOS.xcodeproj/project.xcworkspace/xcuserdata/
+objectivec/ProtocolBuffers_iOS.xcodeproj/project.xcworkspace/xcshareddata/ProtocolBuffers_iOS.xccheckout
+objectivec/ProtocolBuffers_iOS.xcodeproj/xcuserdata/
+# OS X's Finder creates these for state about opened windows/etc.
+**/.DS_Store
+
+# Comformance test output
+conformance/.libs/
+conformance/com/
+conformance/conformance-cpp
+conformance/conformance-csharp
+conformance/conformance-java
+conformance/conformance-objc
+conformance/conformance-test-runner
+conformance/conformance.pb.cc
+conformance/conformance.pb.h
+conformance/Conformance.pbobjc.h
+conformance/Conformance.pbobjc.m
+conformance/conformance.rb
+conformance/javac_middleman
+conformance/protoc_middleman

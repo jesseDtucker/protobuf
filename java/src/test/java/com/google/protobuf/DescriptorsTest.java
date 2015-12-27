@@ -46,6 +46,7 @@ import com.google.protobuf.Descriptors.OneofDescriptor;
 import com.google.protobuf.Descriptors.ServiceDescriptor;
 import com.google.protobuf.test.UnittestImport;
 import com.google.protobuf.test.UnittestImport.ImportEnum;
+import com.google.protobuf.test.UnittestImport.ImportEnumForMap;
 import protobuf_unittest.TestCustomOptions;
 import protobuf_unittest.UnittestCustomOptions;
 import protobuf_unittest.UnittestProto;
@@ -56,6 +57,7 @@ import protobuf_unittest.UnittestProto.TestAllTypes;
 import protobuf_unittest.UnittestProto.TestExtremeDefaultValues;
 import protobuf_unittest.UnittestProto.TestMultipleExtensionRanges;
 import protobuf_unittest.UnittestProto.TestRequired;
+import protobuf_unittest.UnittestProto.TestReservedFields;
 import protobuf_unittest.UnittestProto.TestService;
 
 import junit.framework.TestCase;
@@ -114,7 +116,8 @@ public class DescriptorsTest extends TestCase {
     assertEquals(enumType, file.findEnumTypeByName("ForeignEnum"));
     assertNull(file.findEnumTypeByName("NoSuchType"));
     assertNull(file.findEnumTypeByName("protobuf_unittest.ForeignEnum"));
-    assertEquals(Arrays.asList(ImportEnum.getDescriptor()),
+    assertEquals(Arrays.asList(ImportEnum.getDescriptor(),
+                               ImportEnumForMap.getDescriptor()),
                  UnittestImport.getDescriptor().getEnumTypes());
     for (int i = 0; i < file.getEnumTypes().size(); i++) {
       assertEquals(i, file.getEnumTypes().get(i).getIndex());
@@ -270,6 +273,15 @@ public class DescriptorsTest extends TestCase {
     assertFalse(optionalField.isRepeated());
     assertFalse(repeatedField.isRequired());
     assertTrue(repeatedField.isRepeated());
+  }
+  
+  public void testFieldDescriptorJsonName() throws Exception {
+    FieldDescriptor requiredField = TestRequired.getDescriptor().findFieldByName("a");
+    FieldDescriptor optionalField = TestAllTypes.getDescriptor().findFieldByName("optional_int32");
+    FieldDescriptor repeatedField = TestAllTypes.getDescriptor().findFieldByName("repeated_int32");
+    assertEquals("a", requiredField.getJsonName());
+    assertEquals("optionalInt32", optionalField.getJsonName());
+    assertEquals("repeatedInt32", repeatedField.getJsonName());
   }
 
   public void testFieldDescriptorDefault() throws Exception {
@@ -687,6 +699,9 @@ public class DescriptorsTest extends TestCase {
 
     assertEquals(4, oneofDescriptor.getFieldCount());
     assertSame(oneofDescriptor.getField(1), field);
+
+    assertEquals(4, oneofDescriptor.getFields().size());
+    assertEquals(oneofDescriptor.getFields().get(1), field);
   }
 
   public void testMessageDescriptorExtensions() throws Exception {
@@ -700,6 +715,19 @@ public class DescriptorsTest extends TestCase {
     assertFalse(TestMultipleExtensionRanges.getDescriptor().isExtensionNumber(43));
     assertFalse(TestMultipleExtensionRanges.getDescriptor().isExtensionNumber(4142));
     assertTrue(TestMultipleExtensionRanges.getDescriptor().isExtensionNumber(4143));
+  }
+
+  public void testReservedFields() {
+    Descriptor d = TestReservedFields.getDescriptor();
+    assertTrue(d.isReservedNumber(2));
+    assertFalse(d.isReservedNumber(8));
+    assertTrue(d.isReservedNumber(9));
+    assertTrue(d.isReservedNumber(10));
+    assertTrue(d.isReservedNumber(11));
+    assertFalse(d.isReservedNumber(12));
+    assertFalse(d.isReservedName("foo"));
+    assertTrue(d.isReservedName("bar"));
+    assertTrue(d.isReservedName("baz"));
   }
 
   public void testToString() {

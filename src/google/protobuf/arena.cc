@@ -38,7 +38,13 @@ namespace google {
 namespace protobuf {
 
 google::protobuf::internal::SequenceNumber Arena::lifecycle_id_generator_;
-#ifdef PROTOBUF_USE_DLLS
+#if defined(GOOGLE_PROTOBUF_NO_THREADLOCAL)
+Arena::ThreadCache& Arena::thread_cache() {
+  static internal::ThreadLocalStorage<ThreadCache>* thread_cache_ =
+      new internal::ThreadLocalStorage<ThreadCache>();
+  return *thread_cache_->Get();
+}
+#elif defined(PROTOBUF_USE_DLLS)
 Arena::ThreadCache& Arena::thread_cache() {
   static GOOGLE_THREAD_LOCAL ThreadCache thread_cache_ = { -1, NULL };
   return thread_cache_;
@@ -55,13 +61,20 @@ void Arena::Init() {
   cleanup_list_ = 0;
 
   if (options_.initial_block != NULL && options_.initial_block_size > 0) {
+    GOOGLE_CHECK_GE(options_.initial_block_size, sizeof(Block))
+        << ": Initial block size too small for header.";
+
     // Add first unowned block to list.
     Block* first_block = reinterpret_cast<Block*>(options_.initial_block);
     first_block->size = options_.initial_block_size;
     first_block->pos = kHeaderSize;
     first_block->next = NULL;
-    first_block->owner = &first_block->owner;
-    AddBlock(first_block);
+    // Thread which calls Init() owns the first block. This allows the
+    // single-threaded case to allocate on the first block without taking any
+    // locks.
+    first_block->owner = &thread_cache();
+    SetThreadCacheBlock(first_block);
+    AddBlockInternal(first_block);
     owns_first_block_ = false;
   }
 
@@ -74,7 +87,7 @@ void Arena::Init() {
 }
 
 Arena::~Arena() {
-  uint64 space_allocated = Reset();
+  uint64 space_allocated = ResetInternal();
 
   // Call the destruction hook
   if (options_.on_arena_destruction != NULL) {
@@ -83,10 +96,14 @@ Arena::~Arena() {
 }
 
 uint64 Arena::Reset() {
-  CleanupList();
-  uint64 space_allocated = FreeBlocks();
   // Invalidate any ThreadCaches pointing to any blocks we just destroyed.
   lifecycle_id_ = lifecycle_id_generator_.GetNext();
+  return ResetInternal();
+}
+
+uint64 Arena::ResetInternal() {
+  CleanupList();
+  uint64 space_allocated = FreeBlocks();
 
   // Call the reset hook
   if (options_.on_arena_reset != NULL) {
@@ -131,6 +148,10 @@ Arena::Block* Arena::NewBlock(void* me, Block* my_last_block, size_t n,
 
 void Arena::AddBlock(Block* b) {
   MutexLock l(&blocks_lock_);
+  AddBlockInternal(b);
+}
+
+void Arena::AddBlockInternal(Block* b) {
   b->next = reinterpret_cast<Block*>(google::protobuf::internal::NoBarrier_Load(&blocks_));
   google::protobuf::internal::Release_Store(&blocks_, reinterpret_cast<google::protobuf::internal::AtomicWord>(b));
   if (b->avail() != 0) {
@@ -148,9 +169,15 @@ void Arena::AddListNode(void* elem, void (*cleanup)(void*)) {
             reinterpret_cast<google::protobuf::internal::AtomicWord>(node)));
 }
 
-void* Arena::AllocateAligned(size_t n) {
+void* Arena::AllocateAligned(const std::type_info* allocated, size_t n) {
   // Align n to next multiple of 8 (from Hacker's Delight, Chapter 3.)
   n = (n + 7) & -8;
+
+  // Monitor allocation if needed.
+  if (GOOGLE_PREDICT_FALSE(hooks_cookie_ != NULL) &&
+      options_.on_arena_allocation != NULL) {
+    options_.on_arena_allocation(allocated, n, hooks_cookie_);
+  }
 
   // If this thread already owns a block in this arena then try to use that.
   // This fast path optimizes the case where multiple threads allocate from the
@@ -169,16 +196,6 @@ void* Arena::AllocateAligned(size_t n) {
   void* me = &thread_cache();
   Block* b = reinterpret_cast<Block*>(google::protobuf::internal::Acquire_Load(&hint_));
   if (!b || b->owner != me || b->avail() < n) {
-    // If the next block to allocate from is the first block, try to claim it
-    // for this thread.
-    if (!owns_first_block_ && b->next == NULL) {
-      MutexLock l(&blocks_lock_);
-      if (b->owner == &b->owner && b->avail() >= n) {
-        b->owner = me;
-        SetThreadCacheBlock(b);
-        return AllocFromBlock(b, n);
-      }
-    }
     return SlowAlloc(n);
   }
   return AllocFromBlock(b, n);
@@ -255,8 +272,12 @@ uint64 Arena::FreeBlocks() {
     // Make the first block that was passed in through ArenaOptions
     // available for reuse.
     first_block->pos = kHeaderSize;
-    first_block->owner = &first_block->owner;
-    AddBlock(first_block);
+    // Thread which calls Reset() owns the first block. This allows the
+    // single-threaded case to allocate on the first block without taking any
+    // locks.
+    first_block->owner = &thread_cache();
+    SetThreadCacheBlock(first_block);
+    AddBlockInternal(first_block);
   }
   return space_allocated;
 }

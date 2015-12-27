@@ -40,6 +40,7 @@ import map_test.MapForProto2TestProto.TestUnknownEnumValue;
 import junit.framework.TestCase;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +76,16 @@ public class MapForProto2Test extends TestCase {
     builder.getMutableStringToInt32Field().put("1", 11);
     builder.getMutableStringToInt32Field().put("2", 22);
     builder.getMutableStringToInt32Field().put("3", 33);
+  }
+
+  private void copyMapValues(TestMap source, TestMap.Builder destination) {
+    destination
+        .putAllInt32ToInt32Field(source.getInt32ToInt32Field())
+        .putAllInt32ToStringField(source.getInt32ToStringField())
+        .putAllInt32ToBytesField(source.getInt32ToBytesField())
+        .putAllInt32ToEnumField(source.getInt32ToEnumField())
+        .putAllInt32ToMessageField(source.getInt32ToMessageField())
+        .putAllStringToInt32Field(source.getStringToInt32Field());
   }
 
   private void assertMapValuesSet(TestMap message) {
@@ -177,6 +188,116 @@ public class MapForProto2Test extends TestCase {
     assertEquals(0, message.getInt32ToMessageField().size());
     assertEquals(0, message.getStringToInt32Field().size());
   }
+  
+  public void testMutableMapLifecycle() {
+    TestMap.Builder builder = TestMap.newBuilder();
+    Map<Integer, Integer> intMap = builder.getMutableInt32ToInt32Field();
+    intMap.put(1, 2);
+    assertEquals(newMap(1, 2), builder.build().getInt32ToInt32Field());
+    try {
+      intMap.put(2, 3);
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    assertEquals(newMap(1, 2), builder.getInt32ToInt32Field());
+    builder.getMutableInt32ToInt32Field().put(2, 3);
+    assertEquals(newMap(1, 2, 2, 3), builder.getInt32ToInt32Field());
+
+    Map<Integer, TestMap.EnumValue> enumMap = builder.getMutableInt32ToEnumField();
+    enumMap.put(1, TestMap.EnumValue.BAR);
+    assertEquals(newMap(1, TestMap.EnumValue.BAR), builder.build().getInt32ToEnumField());
+    try {
+      enumMap.put(2, TestMap.EnumValue.FOO);
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    assertEquals(newMap(1, TestMap.EnumValue.BAR), builder.getInt32ToEnumField());
+    builder.getMutableInt32ToEnumField().put(2, TestMap.EnumValue.FOO);
+    assertEquals(
+        newMap(1, TestMap.EnumValue.BAR, 2, TestMap.EnumValue.FOO),
+        builder.getInt32ToEnumField());
+    
+    Map<Integer, String> stringMap = builder.getMutableInt32ToStringField();
+    stringMap.put(1, "1");
+    assertEquals(newMap(1, "1"), builder.build().getInt32ToStringField());
+    try {
+      stringMap.put(2, "2");
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    assertEquals(newMap(1, "1"), builder.getInt32ToStringField());
+    builder.getMutableInt32ToStringField().put(2, "2");
+    assertEquals(
+        newMap(1, "1", 2, "2"),
+        builder.getInt32ToStringField());
+    
+    Map<Integer, TestMap.MessageValue> messageMap = builder.getMutableInt32ToMessageField();
+    messageMap.put(1, TestMap.MessageValue.getDefaultInstance());
+    assertEquals(newMap(1, TestMap.MessageValue.getDefaultInstance()),
+        builder.build().getInt32ToMessageField());
+    try {
+      messageMap.put(2, TestMap.MessageValue.getDefaultInstance());
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    assertEquals(newMap(1, TestMap.MessageValue.getDefaultInstance()),
+        builder.getInt32ToMessageField());
+    builder.getMutableInt32ToMessageField().put(2, TestMap.MessageValue.getDefaultInstance());
+    assertEquals(
+        newMap(1, TestMap.MessageValue.getDefaultInstance(),
+            2, TestMap.MessageValue.getDefaultInstance()),
+        builder.getInt32ToMessageField());
+  }
+
+  public void testMutableMapLifecycle_collections() {
+    TestMap.Builder builder = TestMap.newBuilder();
+    Map<Integer, Integer> intMap = builder.getMutableInt32ToInt32Field();
+    intMap.put(1, 2);
+    assertEquals(newMap(1, 2), builder.build().getInt32ToInt32Field());
+    try {
+      intMap.remove(2);
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    try {
+      intMap.entrySet().remove(new Object());
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    try {
+      intMap.entrySet().iterator().remove();
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    try {
+      intMap.keySet().remove(new Object());
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    try {
+      intMap.values().remove(new Object());
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    try {
+      intMap.values().iterator().remove();
+      fail();
+    } catch (UnsupportedOperationException e) {
+      // expected
+    }
+    assertEquals(newMap(1, 2), intMap);
+    assertEquals(newMap(1, 2), builder.getInt32ToInt32Field());
+    assertEquals(newMap(1, 2), builder.build().getInt32ToInt32Field());
+  }
 
   public void testGettersAndSetters() throws Exception {
     TestMap.Builder builder = TestMap.newBuilder();
@@ -199,26 +320,36 @@ public class MapForProto2Test extends TestCase {
     assertMapValuesCleared(message);
   }
 
+  public void testPutAll() throws Exception {
+    TestMap.Builder sourceBuilder = TestMap.newBuilder();
+    setMapValues(sourceBuilder);
+    TestMap source = sourceBuilder.build();
+
+    TestMap.Builder destination = TestMap.newBuilder();
+    copyMapValues(source, destination);
+    assertMapValuesSet(destination.build());
+  }
+
   public void testSerializeAndParse() throws Exception {
     TestMap.Builder builder = TestMap.newBuilder();
     setMapValues(builder);
     TestMap message = builder.build();
     assertEquals(message.getSerializedSize(), message.toByteString().size());
-    message = TestMap.PARSER.parseFrom(message.toByteString());
+    message = TestMap.parser().parseFrom(message.toByteString());
     assertMapValuesSet(message);
     
     builder = message.toBuilder();
     updateMapValues(builder);
     message = builder.build();
     assertEquals(message.getSerializedSize(), message.toByteString().size());
-    message = TestMap.PARSER.parseFrom(message.toByteString());
+    message = TestMap.parser().parseFrom(message.toByteString());
     assertMapValuesUpdated(message);
     
     builder = message.toBuilder();
     builder.clear();
     message = builder.build();
     assertEquals(message.getSerializedSize(), message.toByteString().size());
-    message = TestMap.PARSER.parseFrom(message.toByteString());
+    message = TestMap.parser().parseFrom(message.toByteString());
     assertMapValuesCleared(message);
   }
   
@@ -513,4 +644,41 @@ public class MapForProto2Test extends TestCase {
     assertEquals(2, message.getRecursiveMapField().get(1).getValue());
     assertEquals(4, message.getRecursiveMapField().get(3).getValue());
   }
+
+  public void testIterationOrder() throws Exception {
+    TestMap.Builder builder = TestMap.newBuilder();
+    setMapValues(builder);
+    TestMap message = builder.build();
+
+    assertEquals(Arrays.asList("1", "2", "3"),
+        new ArrayList<String>(message.getStringToInt32Field().keySet()));
+  }
+
+  // Regression test for b/20494788
+  public void testMapInitializationOrder() throws Exception {
+    assertEquals("RedactAllTypes", map_test.RedactAllTypes
+        .getDefaultInstance().getDescriptorForType().getName());
+
+    map_test.Message1.Builder builder =
+        map_test.Message1.newBuilder();
+    builder.getMutableMapField().put("key", true);
+    map_test.Message1 message = builder.build();
+    Message mapEntry = (Message) message.getRepeatedField(
+        message.getDescriptorForType().findFieldByName("map_field"), 0);
+    assertEquals(2, mapEntry.getAllFields().size());
+  }
+  
+  private static <K, V> Map<K, V> newMap(K key1, V value1) {
+    Map<K, V> map = new HashMap<K, V>();
+    map.put(key1, value1);
+    return map;
+  }
+  
+  private static <K, V> Map<K, V> newMap(K key1, V value1, K key2, V value2) {
+    Map<K, V> map = new HashMap<K, V>();
+    map.put(key1, value1);
+    map.put(key2, value2);
+    return map;
+  }
 }
+

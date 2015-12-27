@@ -314,7 +314,7 @@ void ExtensionSet::Add##CAMELCASE(int number, FieldType type,                  \
     extension->is_repeated = true;                                             \
     extension->is_packed = packed;                                             \
     extension->repeated_##LOWERCASE##_value =                                  \
-      Arena::Create<RepeatedField<LOWERCASE> >(arena_, arena_);                \
+      Arena::CreateMessage<RepeatedField<LOWERCASE> >(arena_);                 \
   } else {                                                                     \
     GOOGLE_DCHECK_TYPE(*extension, REPEATED, UPPERCASE);                              \
     GOOGLE_DCHECK_EQ(extension->is_packed, packed);                                   \
@@ -359,43 +359,43 @@ void* ExtensionSet::MutableRawRepeatedField(int number, FieldType field_type,
         static_cast<WireFormatLite::FieldType>(field_type))) {
       case WireFormatLite::CPPTYPE_INT32:
         extension->repeated_int32_value =
-            Arena::Create<RepeatedField<int32> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<int32> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_INT64:
         extension->repeated_int64_value =
-            Arena::Create<RepeatedField<int64> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<int64> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_UINT32:
         extension->repeated_uint32_value =
-            Arena::Create<RepeatedField<uint32> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<uint32> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_UINT64:
         extension->repeated_uint64_value =
-            Arena::Create<RepeatedField<uint64> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<uint64> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_DOUBLE:
         extension->repeated_double_value =
-            Arena::Create<RepeatedField<double> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<double> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_FLOAT:
         extension->repeated_float_value =
-            Arena::Create<RepeatedField<float> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<float> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_BOOL:
         extension->repeated_bool_value =
-            Arena::Create<RepeatedField<bool> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<bool> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_ENUM:
         extension->repeated_enum_value =
-            Arena::Create<RepeatedField<int> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedField<int> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_STRING:
         extension->repeated_string_value =
-            Arena::Create<RepeatedPtrField< ::std::string> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedPtrField< ::std::string> >(arena_);
         break;
       case WireFormatLite::CPPTYPE_MESSAGE:
         extension->repeated_message_value =
-            Arena::Create<RepeatedPtrField<MessageLite> >(arena_, arena_);
+            Arena::CreateMessage<RepeatedPtrField<MessageLite> >(arena_);
         break;
     }
   }
@@ -468,7 +468,7 @@ void ExtensionSet::AddEnum(int number, FieldType type,
     extension->is_repeated = true;
     extension->is_packed = packed;
     extension->repeated_enum_value =
-        Arena::Create<RepeatedField<int> >(arena_, arena_);
+        Arena::CreateMessage<RepeatedField<int> >(arena_);
   } else {
     GOOGLE_DCHECK_TYPE(*extension, REPEATED, ENUM);
     GOOGLE_DCHECK_EQ(extension->is_packed, packed);
@@ -529,7 +529,7 @@ string* ExtensionSet::AddString(int number, FieldType type,
     extension->is_repeated = true;
     extension->is_packed = false;
     extension->repeated_string_value =
-        Arena::Create<RepeatedPtrField<string> >(arena_, arena_);
+        Arena::CreateMessage<RepeatedPtrField<string> >(arena_);
   } else {
     GOOGLE_DCHECK_TYPE(*extension, REPEATED, STRING);
   }
@@ -595,20 +595,21 @@ void ExtensionSet::SetAllocatedMessage(int number, FieldType type,
     ClearExtension(number);
     return;
   }
+  ::google::protobuf::Arena* message_arena = message->GetArena();
   Extension* extension;
   if (MaybeNewExtension(number, descriptor, &extension)) {
     extension->type = type;
     GOOGLE_DCHECK_EQ(cpp_type(extension->type), WireFormatLite::CPPTYPE_MESSAGE);
     extension->is_repeated = false;
     extension->is_lazy = false;
-    if (message->GetArena() == arena_) {
+    if (message_arena == arena_) {
       extension->message_value = message;
+    } else if (message_arena == NULL) {
+      extension->message_value = message;
+      arena_->Own(message);  // not NULL because not equal to message_arena
     } else {
       extension->message_value = message->New(arena_);
       extension->message_value->CheckTypeAndMergeFrom(*message);
-      if (message->GetArena() == NULL) {
-        delete message;
-      }
     }
   } else {
     GOOGLE_DCHECK_TYPE(*extension, OPTIONAL, MESSAGE);
@@ -618,19 +619,48 @@ void ExtensionSet::SetAllocatedMessage(int number, FieldType type,
       if (arena_ == NULL) {
         delete extension->message_value;
       }
-      if (message->GetArena() == arena_) {
+      if (message_arena == arena_) {
         extension->message_value = message;
+      } else if (message_arena == NULL) {
+        extension->message_value = message;
+        arena_->Own(message);  // not NULL because not equal to message_arena
       } else {
         extension->message_value = message->New(arena_);
         extension->message_value->CheckTypeAndMergeFrom(*message);
-        if (message->GetArena() == NULL) {
-          delete message;
-        }
       }
     }
   }
   extension->is_cleared = false;
 }
+
+void ExtensionSet::UnsafeArenaSetAllocatedMessage(
+    int number, FieldType type, const FieldDescriptor* descriptor,
+    MessageLite* message) {
+  if (message == NULL) {
+    ClearExtension(number);
+    return;
+  }
+  Extension* extension;
+  if (MaybeNewExtension(number, descriptor, &extension)) {
+    extension->type = type;
+    GOOGLE_DCHECK_EQ(cpp_type(extension->type), WireFormatLite::CPPTYPE_MESSAGE);
+    extension->is_repeated = false;
+    extension->is_lazy = false;
+    extension->message_value = message;
+  } else {
+    GOOGLE_DCHECK_TYPE(*extension, OPTIONAL, MESSAGE);
+    if (extension->is_lazy) {
+      extension->lazymessage_value->UnsafeArenaSetAllocatedMessage(message);
+    } else {
+      if (arena_ == NULL) {
+        delete extension->message_value;
+      }
+      extension->message_value = message;
+    }
+  }
+  extension->is_cleared = false;
+}
+
 
 MessageLite* ExtensionSet::ReleaseMessage(int number,
                                           const MessageLite& prototype) {
@@ -712,7 +742,7 @@ MessageLite* ExtensionSet::AddMessage(int number, FieldType type,
     GOOGLE_DCHECK_EQ(cpp_type(extension->type), WireFormatLite::CPPTYPE_MESSAGE);
     extension->is_repeated = true;
     extension->repeated_message_value =
-        Arena::Create<RepeatedPtrField<MessageLite> >(arena_, arena_);
+        Arena::CreateMessage<RepeatedPtrField<MessageLite> >(arena_);
   } else {
     GOOGLE_DCHECK_TYPE(*extension, REPEATED, MESSAGE);
   }
@@ -866,7 +896,7 @@ void ExtensionSet::InternalExtensionMergeFrom(
       case WireFormatLite::CPPTYPE_##UPPERCASE:                             \
         if (is_new) {                                                       \
           extension->repeated_##LOWERCASE##_value =                         \
-            Arena::Create<REPEATED_TYPE >(arena_, arena_);                  \
+            Arena::CreateMessage<REPEATED_TYPE >(arena_);                   \
         }                                                                   \
         extension->repeated_##LOWERCASE##_value->MergeFrom(                 \
           *other_extension.repeated_##LOWERCASE##_value);                   \
@@ -886,7 +916,7 @@ void ExtensionSet::InternalExtensionMergeFrom(
       case WireFormatLite::CPPTYPE_MESSAGE:
         if (is_new) {
           extension->repeated_message_value =
-              Arena::Create<RepeatedPtrField<MessageLite> >(arena_, arena_);
+              Arena::CreateMessage<RepeatedPtrField<MessageLite> >(arena_);
         }
         // We can't call RepeatedPtrField<MessageLite>::MergeFrom() because
         // it would attempt to allocate new objects.
@@ -1718,65 +1748,67 @@ void ExtensionSet::Extension::Free() {
 // ==================================================================
 // Default repeated field instances for iterator-compatible accessors
 
+GOOGLE_PROTOBUF_DECLARE_ONCE(repeated_primitive_generic_type_traits_once_init_);
+GOOGLE_PROTOBUF_DECLARE_ONCE(repeated_string_type_traits_once_init_);
+GOOGLE_PROTOBUF_DECLARE_ONCE(repeated_message_generic_type_traits_once_init_);
+
+void RepeatedPrimitiveGenericTypeTraits::InitializeDefaultRepeatedFields() {
+  default_repeated_field_int32_ = new RepeatedField<int32>;
+  default_repeated_field_int64_ = new RepeatedField<int64>;
+  default_repeated_field_uint32_ = new RepeatedField<uint32>;
+  default_repeated_field_uint64_ = new RepeatedField<uint64>;
+  default_repeated_field_double_ = new RepeatedField<double>;
+  default_repeated_field_float_ = new RepeatedField<float>;
+  default_repeated_field_bool_ = new RepeatedField<bool>;
+  OnShutdown(&DestroyDefaultRepeatedFields);
+}
+
+void RepeatedPrimitiveGenericTypeTraits::DestroyDefaultRepeatedFields() {
+  delete default_repeated_field_int32_;
+  delete default_repeated_field_int64_;
+  delete default_repeated_field_uint32_;
+  delete default_repeated_field_uint64_;
+  delete default_repeated_field_double_;
+  delete default_repeated_field_float_;
+  delete default_repeated_field_bool_;
+}
+
+void RepeatedStringTypeTraits::InitializeDefaultRepeatedFields() {
+  default_repeated_field_ = new RepeatedFieldType;
+  OnShutdown(&DestroyDefaultRepeatedFields);
+}
+
+void RepeatedStringTypeTraits::DestroyDefaultRepeatedFields() {
+  delete default_repeated_field_;
+}
+
+void RepeatedMessageGenericTypeTraits::InitializeDefaultRepeatedFields() {
+  default_repeated_field_ = new RepeatedFieldType;
+  OnShutdown(&DestroyDefaultRepeatedFields);
+}
+
+void RepeatedMessageGenericTypeTraits::DestroyDefaultRepeatedFields() {
+  delete default_repeated_field_;
+}
+
+const RepeatedField<int32>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int32_ = NULL;
+const RepeatedField<int64>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int64_ = NULL;
+const RepeatedField<uint32>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint32_ = NULL;
+const RepeatedField<uint64>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint64_ = NULL;
+const RepeatedField<double>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_double_ = NULL;
+const RepeatedField<float>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_float_ = NULL;
+const RepeatedField<bool>*
+RepeatedPrimitiveGenericTypeTraits::default_repeated_field_bool_ = NULL;
 const RepeatedStringTypeTraits::RepeatedFieldType*
 RepeatedStringTypeTraits::default_repeated_field_ = NULL;
-
 const RepeatedMessageGenericTypeTraits::RepeatedFieldType*
 RepeatedMessageGenericTypeTraits::default_repeated_field_ = NULL;
-
-#define PROTOBUF_DEFINE_DEFAULT_REPEATED(TYPE)                                 \
-    const RepeatedField<TYPE>*                                                 \
-    RepeatedPrimitiveGenericTypeTraits::default_repeated_field_##TYPE##_ = NULL;
-
-PROTOBUF_DEFINE_DEFAULT_REPEATED(int32)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(int64)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(uint32)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(uint64)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(double)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(float)
-PROTOBUF_DEFINE_DEFAULT_REPEATED(bool)
-
-#undef PROTOBUF_DEFINE_DEFAULT_REPEATED
-
-struct StaticDefaultRepeatedFieldsInitializer {
-  StaticDefaultRepeatedFieldsInitializer() {
-    InitializeDefaultRepeatedFields();
-    OnShutdown(&DestroyDefaultRepeatedFields);
-  }
-} static_repeated_fields_initializer;
-
-void InitializeDefaultRepeatedFields() {
-  RepeatedStringTypeTraits::default_repeated_field_ =
-      new RepeatedStringTypeTraits::RepeatedFieldType;
-  RepeatedMessageGenericTypeTraits::default_repeated_field_ =
-      new RepeatedMessageGenericTypeTraits::RepeatedFieldType;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int32_ =
-      new RepeatedField<int32>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int64_ =
-      new RepeatedField<int64>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint32_ =
-      new RepeatedField<uint32>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint64_ =
-      new RepeatedField<uint64>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_double_ =
-      new RepeatedField<double>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_float_ =
-      new RepeatedField<float>;
-  RepeatedPrimitiveGenericTypeTraits::default_repeated_field_bool_ =
-      new RepeatedField<bool>;
-}
-
-void DestroyDefaultRepeatedFields() {
-  delete RepeatedStringTypeTraits::default_repeated_field_;
-  delete RepeatedMessageGenericTypeTraits::default_repeated_field_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int32_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_int64_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint32_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_uint64_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_double_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_float_;
-  delete RepeatedPrimitiveGenericTypeTraits::default_repeated_field_bool_;
-}
 
 }  // namespace internal
 }  // namespace protobuf

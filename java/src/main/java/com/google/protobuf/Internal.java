@@ -30,6 +30,8 @@
 
 package com.google.protobuf;
 
+import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.util.AbstractList;
@@ -154,8 +156,8 @@ public class Internal {
    * but currently (2011) still accepts 3-byte surrogate character
    * byte sequences.
    *
-   * <p>See the Unicode Standard,</br>
-   * Table 3-6. <em>UTF-8 Bit Distribution</em>,</br>
+   * <p>See the Unicode Standard,<br>
+   * Table 3-6. <em>UTF-8 Bit Distribution</em>,<br>
    * Table 3-7. <em>Well Formed UTF-8 Byte Sequences</em>.
    *
    * <p>As of 2011-02, this method simply returns the result of {@link
@@ -357,6 +359,17 @@ public class Internal {
     }
   }
 
+  @SuppressWarnings("unchecked")
+  public static <T extends MessageLite> T getDefaultInstance(Class<T> clazz) {
+    try {
+      Method method = clazz.getMethod("getDefaultInstance");
+      return (T) method.invoke(method);
+    } catch (Exception e) {
+      throw new RuntimeException(
+          "Failed to get default instance for " + clazz, e);
+    }
+  }
+
   /**
    * An empty byte array constant used in generated code.
    */
@@ -374,7 +387,7 @@ public class Internal {
 
 
   /**
-   * Provides an immutable view of List<T> around a List<F>.
+   * Provides an immutable view of {@code List<T>} around a {@code List<F>}.
    *
    * Protobuf internal. Used in protobuf generated code only.
    */
@@ -406,7 +419,8 @@ public class Internal {
   }
 
   /**
-   * Wrap around a Map<K, RealValue> and provide a Map<K, V> interface.
+   * Wrap around a {@code Map<K, RealValue>} and provide a {@code Map<K, V>}
+   * interface.
    */
   public static class MapAdapter<K, V, RealValue> extends AbstractMap<K, V> {
     /**
@@ -531,5 +545,133 @@ public class Internal {
         return valueConverter.doForward(oldValue);
       }
     }
+  }
+
+  /**
+   * Extends {@link List} to add the capability to make the list immutable and inspect if it is
+   * modifiable.
+   */
+  public static interface ProtobufList<E> extends List<E> {
+
+    /**
+     * Makes this list immutable. All subsequent modifications will throw an
+     * {@link UnsupportedOperationException}.
+     */
+    void makeImmutable();
+
+    /**
+     * Returns whether this list can be modified via the publicly accessible {@link List} methods.
+     */
+    boolean isModifiable();
+  }
+
+  /**
+   * A {@link java.util.List} implementation that avoids boxing the elements into Integers if
+   * possible. Does not support null elements.
+   */
+  public static interface IntList extends ProtobufList<Integer> {
+
+    /**
+     * Like {@link #get(int)} but more efficient in that it doesn't box the returned value.
+     */
+    int getInt(int index);
+
+    /**
+     * Like {@link #add(Object)} but more efficient in that it doesn't box the element.
+     */
+    void addInt(int element);
+
+    /**
+     * Like {@link #set(int, Object)} but more efficient in that it doesn't box the element.
+     */
+    int setInt(int index, int element);
+  }
+
+  /**
+   * A {@link java.util.List} implementation that avoids boxing the elements into Booleans if
+   * possible. Does not support null elements.
+   */
+  public static interface BooleanList extends ProtobufList<Boolean> {
+
+    /**
+     * Like {@link #get(int)} but more efficient in that it doesn't box the returned value.
+     */
+    boolean getBoolean(int index);
+
+    /**
+     * Like {@link #add(Object)} but more efficient in that it doesn't box the element.
+     */
+    void addBoolean(boolean element);
+
+    /**
+     * Like {@link #set(int, Object)} but more efficient in that it doesn't box the element.
+     */
+    boolean setBoolean(int index, boolean element);
+  }
+
+  /**
+   * A {@link java.util.List} implementation that avoids boxing the elements into Longs if
+   * possible. Does not support null elements.
+   */
+  public static interface LongList extends ProtobufList<Long> {
+
+    /**
+     * Like {@link #get(int)} but more efficient in that it doesn't box the returned value.
+     */
+    long getLong(int index);
+
+    /**
+     * Like {@link #add(Object)} but more efficient in that it doesn't box the element.
+     */
+    void addLong(long element);
+
+    /**
+     * Like {@link #set(int, Object)} but more efficient in that it doesn't box the element.
+     */
+    long setLong(int index, long element);
+  }
+
+  /**
+   * A {@link java.util.List} implementation that avoids boxing the elements into Doubles if
+   * possible. Does not support null elements.
+   */
+  public static interface DoubleList extends ProtobufList<Double> {
+
+    /**
+     * Like {@link #get(int)} but more efficient in that it doesn't box the returned value.
+     */
+    double getDouble(int index);
+
+    /**
+     * Like {@link #add(Object)} but more efficient in that it doesn't box the element.
+     */
+    void addDouble(double element);
+
+    /**
+     * Like {@link #set(int, Object)} but more efficient in that it doesn't box the element.
+     */
+    double setDouble(int index, double element);
+  }
+
+  /**
+   * A {@link java.util.List} implementation that avoids boxing the elements into Floats if
+   * possible. Does not support null elements.
+   */
+  public static interface FloatList extends ProtobufList<Float> {
+
+    /**
+     * Like {@link #get(int)} but more efficient in that it doesn't box the returned value.
+     */
+    float getFloat(int index);
+
+    /**
+     * Like {@link #add(Object)} but more efficient in that it doesn't box the element.
+     */
+    void addFloat(float element);
+
+    /**
+     * Like {@link #set(int, Object)} but more efficient in that it doesn't box the element.
+     */
+    float setFloat(int index, float element);
   }
 }

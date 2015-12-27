@@ -229,6 +229,32 @@ TEST_F(ParserTest, WarnIfSyntaxIdentifierOmmitted) {
 
 typedef ParserTest ParseMessageTest;
 
+TEST_F(ParseMessageTest, IgnoreBOM) {
+  char input[] = "   message TestMessage {\n"
+      "  required int32 foo = 1;\n"
+      "}\n";
+  // Set UTF-8 BOM.
+  input[0] = (char)0xEF;
+  input[1] = (char)0xBB;
+  input[2] = (char)0xBF;
+  ExpectParsesTo(input,
+    "message_type {"
+    "  name: \"TestMessage\""
+    "  field { name:\"foo\" label:LABEL_REQUIRED type:TYPE_INT32 number:1 }"
+    "}");
+}
+
+TEST_F(ParseMessageTest, BOMError) {
+  char input[] = "   message TestMessage {\n"
+      "  required int32 foo = 1;\n"
+      "}\n";
+  input[0] = (char)0xEF;
+  ExpectHasErrors(input,
+                  "0:1: Proto file starts with 0xEF but not UTF-8 BOM. "
+                  "Only UTF-8 is accepted for proto file.\n"
+                  "0:0: Expected top-level statement (e.g. \"message\").\n");
+}
+
 TEST_F(ParseMessageTest, SimpleMessage) {
   ExpectParsesTo(
     "message TestMessage {\n"
@@ -426,6 +452,20 @@ TEST_F(ParseMessageTest, FieldDefaults) {
 #undef ETC
 }
 
+TEST_F(ParseMessageTest, FieldJsonName) {
+  ExpectParsesTo(
+    "message TestMessage {\n"
+    "  optional string foo = 1 [json_name = \"@type\"];\n"
+    "}\n",
+    "message_type {"
+    "  name: \"TestMessage\""
+    "  field {\n"
+    "    name: \"foo\" label: LABEL_OPTIONAL type: TYPE_STRING number: 1"
+    "    json_name: \"@type\"\n"
+    "  }\n"
+    "}\n");
+}
+
 TEST_F(ParseMessageTest, FieldOptions) {
   ExpectParsesTo(
     "message TestMessage {\n"
@@ -620,6 +660,36 @@ TEST_F(ParseMessageTest, NestedEnum) {
     "}");
 }
 
+TEST_F(ParseMessageTest, ReservedRange) {
+  ExpectParsesTo(
+    "message TestMessage {\n"
+    "  required int32 foo = 1;\n"
+    "  reserved 2, 15, 9 to 11, 3;\n"
+    "}\n",
+
+    "message_type {"
+    "  name: \"TestMessage\""
+    "  field { name:\"foo\" label:LABEL_REQUIRED type:TYPE_INT32 number:1 }"
+    "  reserved_range { start:2   end:3         }"
+    "  reserved_range { start:15  end:16        }"
+    "  reserved_range { start:9   end:12        }"
+    "  reserved_range { start:3   end:4         }"
+    "}");
+}
+
+TEST_F(ParseMessageTest, ReservedNames) {
+  ExpectParsesTo(
+    "message TestMessage {\n"
+    "  reserved \"foo\", \"bar\";\n"
+    "}\n",
+
+    "message_type {"
+    "  name: \"TestMessage\""
+    "  reserved_name: \"foo\""
+    "  reserved_name: \"bar\""
+    "}");
+}
+
 TEST_F(ParseMessageTest, ExtensionRange) {
   ExpectParsesTo(
     "message TestMessage {\n"
@@ -715,19 +785,17 @@ TEST_F(ParseMessageTest, MultipleExtensionsOneExtendee) {
     "            type_name:\"TestMessage\" extendee: \"Extendee1\" }");
 }
 
-TEST_F(ParseMessageTest, OptionalOptionalLabelProto3) {
+TEST_F(ParseMessageTest, OptionalLabelProto3) {
   ExpectParsesTo(
     "syntax = \"proto3\";\n"
     "message TestMessage {\n"
     "  int32 foo = 1;\n"
-    "  optional int32 bar = 2;\n"
     "}\n",
 
     "syntax: \"proto3\" "
     "message_type {"
     "  name: \"TestMessage\""
-    "  field { name:\"foo\" label:LABEL_OPTIONAL type:TYPE_INT32 number:1 }"
-    "  field { name:\"bar\" label:LABEL_OPTIONAL type:TYPE_INT32 number:2 } }");
+    "  field { name:\"foo\" label:LABEL_OPTIONAL type:TYPE_INT32 number:1 } }");
 }
 
 // ===================================================================
@@ -1072,6 +1140,22 @@ TEST_F(ParseErrorTest, DefaultValueTooLarge) {
     "6:36: Integer out of range.\n");
 }
 
+TEST_F(ParseErrorTest, JsonNameNotString) {
+  ExpectHasErrors(
+    "message TestMessage {\n"
+    "  optional string foo = 1 [json_name=1];\n"
+    "}\n",
+    "1:37: Expected string for JSON name.\n");
+}
+
+TEST_F(ParseErrorTest, DuplicateJsonName) {
+  ExpectHasErrors(
+    "message TestMessage {\n"
+    "  optional uint32 foo = 1 [json_name=\"a\",json_name=\"b\"];\n"
+    "}\n",
+    "1:41: Already set option \"json_name\".\n");
+}
+
 TEST_F(ParseErrorTest, EnumValueOutOfRange) {
   ExpectHasErrors(
     "enum TestEnum {\n"
@@ -1084,6 +1168,29 @@ TEST_F(ParseErrorTest, EnumValueOutOfRange) {
     "2:19: Integer out of range.\n"
     "3:19: Integer out of range.\n"
     "4:19: Integer out of range.\n");
+}
+
+TEST_F(ParseErrorTest, EnumAllowAliasFalse) {
+  ExpectHasErrors(
+    "enum Foo {\n"
+    "  option allow_alias = false;\n"
+    "  BAR = 1;\n"
+    "  BAZ = 2;\n"
+    "}\n",
+    "5:0: \"Foo\" declares 'option allow_alias = false;' which has no effect. "
+    "Please remove the declaration.\n");
+}
+
+TEST_F(ParseErrorTest, UnnecessaryEnumAllowAlias) {
+  ExpectHasErrors(
+    "enum Foo {\n"
+    "  option allow_alias = true;\n"
+    "  BAR = 1;\n"
+    "  BAZ = 2;\n"
+    "}\n",
+    "5:0: \"Foo\" declares support for enum aliases but no enum values share "
+    "field numbers. Please remove the unnecessary 'option allow_alias = true;' "
+    "declaration.\n");
 }
 
 TEST_F(ParseErrorTest, DefaultValueMissing) {
@@ -1230,6 +1337,18 @@ TEST_F(ParseErrorTest, EofInAggregateValue) {
       "1:0: Unexpected end of stream while parsing aggregate value.\n");
 }
 
+TEST_F(ParseErrorTest, ExplicitOptionalLabelProto3) {
+  ExpectHasErrors(
+      "syntax = 'proto3';\n"
+      "message TestMessage {\n"
+      "  optional int32 foo = 1;\n"
+      "}\n",
+      "2:11: Explicit 'optional' labels are disallowed in the Proto3 syntax. "
+      "To define 'optional' fields in Proto3, simply remove the 'optional' "
+      "label, as fields are 'optional' by default.\n");
+}
+
+
 // -------------------------------------------------------------------
 // Enum errors
 
@@ -1245,6 +1364,33 @@ TEST_F(ParseErrorTest, EnumValueMissingNumber) {
     "  FOO;\n"
     "}\n",
     "1:5: Missing numeric value for enum constant.\n");
+}
+
+// -------------------------------------------------------------------
+// Reserved field number errors
+
+TEST_F(ParseErrorTest, ReservedMaxNotAllowed) {
+  ExpectHasErrors(
+    "message Foo {\n"
+    "  reserved 10 to max;\n"
+    "}\n",
+    "1:17: Expected integer.\n");
+}
+
+TEST_F(ParseErrorTest, ReservedMixNameAndNumber) {
+  ExpectHasErrors(
+    "message Foo {\n"
+    "  reserved 10, \"foo\";\n"
+    "}\n",
+    "1:15: Expected field number range.\n");
+}
+
+TEST_F(ParseErrorTest, ReservedMissingQuotes) {
+  ExpectHasErrors(
+    "message Foo {\n"
+    "  reserved foo;\n"
+    "}\n",
+    "1:11: Expected field name or number range.\n");
 }
 
 // -------------------------------------------------------------------
@@ -1716,6 +1862,8 @@ TEST_F(ParseDescriptorDebugTest, TestCommentsInDebugString) {
       "// Detached comment before TestMessage1.\n"
       "\n"
       "// Message comment.\n"
+      "//\n"
+      "// More detail in message comment.\n"
       "message TestMessage1 {\n"
       "\n"
       "  // Detached comment before foo.\n"
@@ -1767,11 +1915,6 @@ TEST_F(ParseDescriptorDebugTest, TestCommentsInDebugString) {
       pool_.BuildFileCollectingErrors(parsed_desc, &collector);
   ASSERT_TRUE(descriptor != NULL);
 
-  DebugStringOptions debug_string_options;
-  debug_string_options.include_comments = true;
-  const string debug_string =
-      descriptor->DebugStringWithOptions(debug_string_options);
-
   // Ensure that each of the comments appears somewhere in the DebugString().
   // We don't test the exact comment placement or formatting, because we do not
   // want to be too fragile here.
@@ -1782,6 +1925,7 @@ TEST_F(ParseDescriptorDebugTest, TestCommentsInDebugString) {
     "Package comment.",
     "Detached comment before TestMessage1.",
     "Message comment.",
+    "More detail in message comment.",
     "Detached comment before foo.",
     "Field comment",
     "Detached comment before NestedMessage.",
@@ -1796,11 +1940,28 @@ TEST_F(ParseDescriptorDebugTest, TestCommentsInDebugString) {
     "RPC comment",
   };
 
-  for (int i = 0; i < GOOGLE_ARRAYSIZE(expected_comments); ++i) {
-    string::size_type found_pos = debug_string.find(expected_comments[i]);
-    EXPECT_TRUE(found_pos != string::npos)
-        << "\"" << expected_comments[i] << "\" not found.";
+  DebugStringOptions debug_string_options;
+  debug_string_options.include_comments = true;
+
+  {
+    const string debug_string =
+        descriptor->DebugStringWithOptions(debug_string_options);
+
+    for (int i = 0; i < GOOGLE_ARRAYSIZE(expected_comments); ++i) {
+      string::size_type found_pos = debug_string.find(expected_comments[i]);
+      EXPECT_TRUE(found_pos != string::npos)
+          << "\"" << expected_comments[i] << "\" not found.";
+    }
+
+    // Result of DebugStringWithOptions should be parseable.
+    SetupParser(debug_string.c_str());
+    FileDescriptorProto parsed;
+    parser_->Parse(input_.get(), &parsed);
+    EXPECT_EQ(io::Tokenizer::TYPE_END, input_->current().type);
+    ASSERT_EQ("", error_collector_.text_)
+        << "Failed to parse:\n" << debug_string;
   }
+
 }
 
 TEST_F(ParseDescriptorDebugTest, TestMaps) {

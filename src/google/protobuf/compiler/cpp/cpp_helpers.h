@@ -66,7 +66,18 @@ extern const char kThinSeparator[];
 string ClassName(const Descriptor* descriptor, bool qualified);
 string ClassName(const EnumDescriptor* enum_descriptor, bool qualified);
 
+// Name of the CRTP class template (for use with proto_h).
+// This is a class name, like "ProtoName_InternalBase".
+string DependentBaseClassTemplateName(const Descriptor* descriptor);
+
+// Name of the base class: either the dependent base class (for use with
+// proto_h) or google::protobuf::Message.
 string SuperClassName(const Descriptor* descriptor);
+
+// Returns a string that down-casts from the dependent base class to the
+// derived class.
+string DependentBaseDownCast();
+string DependentBaseConstDownCast();
 
 // Get the (unqualified) name that should be used for this field in C++ code.
 // The name is coerced to lower-case to emulate proto1 behavior.  People
@@ -87,6 +98,20 @@ inline const Descriptor* FieldScope(const FieldDescriptor* field) {
   return field->is_extension() ?
     field->extension_scope() : field->containing_type();
 }
+
+// Returns true if the given 'field_descriptor' has a message type that is
+// a dependency of the file where the field is defined (i.e., the field
+// type is defined in a different file than the message holding the field).
+//
+// This only applies to Message-typed fields. Enum-typed fields may refer
+// to an enum in a dependency; however, enums are specified and
+// forward-declared with an enum-base, so the definition is not required to
+// manipulate the field value.
+bool IsFieldDependent(const FieldDescriptor* field_descriptor);
+
+// Returns the name that should be used for forcing dependent lookup from a
+// dependent base class.
+string DependentTypeName(const FieldDescriptor* field);
 
 // Returns the fully-qualified type name field->message_type().  Usually this
 // is just ClassName(field->message_type(), true);
@@ -177,11 +202,6 @@ inline bool HasGenericServices(const FileDescriptor* file) {
          file->options().cc_generic_services();
 }
 
-// Should string fields in this file verify that their contents are UTF-8?
-inline bool HasUtf8Verification(const FileDescriptor* file) {
-  return file->options().optimize_for() != FileOptions::LITE_RUNTIME;
-}
-
 // Should we generate a separate, super-optimized code path for serializing to
 // flat arrays?  We don't do this in Lite mode because we'd rather reduce code
 // size.
@@ -241,6 +261,25 @@ inline bool SupportsArenas(const Descriptor* desc) {
 inline bool SupportsArenas(const FieldDescriptor* field) {
   return SupportsArenas(field->file());
 }
+
+bool IsAnyMessage(const FileDescriptor* descriptor);
+bool IsAnyMessage(const Descriptor* descriptor);
+
+bool IsWellKnownMessage(const FileDescriptor* descriptor);
+
+void GenerateUtf8CheckCodeForString(
+    const FieldDescriptor* field,
+    bool for_parse,
+    const map<string, string>& variables,
+    const char* parameters,
+    io::Printer* printer);
+
+void GenerateUtf8CheckCodeForCord(
+    const FieldDescriptor* field,
+    bool for_parse,
+    const map<string, string>& variables,
+    const char* parameters,
+    io::Printer* printer);
 
 }  // namespace cpp
 }  // namespace compiler

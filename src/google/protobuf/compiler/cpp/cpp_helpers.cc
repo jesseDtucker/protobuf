@@ -39,6 +39,7 @@
 
 #include <google/protobuf/compiler/cpp/cpp_helpers.h>
 #include <google/protobuf/io/printer.h>
+#include <google/protobuf/stubs/logging.h>
 #include <google/protobuf/stubs/common.h>
 #include <google/protobuf/stubs/strutil.h>
 #include <google/protobuf/stubs/substitute.h>
@@ -50,6 +51,10 @@ namespace compiler {
 namespace cpp {
 
 namespace {
+
+static const char kAnyMessageName[] = "Any";
+static const char kAnyProtoFile[] = "google/protobuf/any.proto";
+static const char kGoogleProtobufPrefix[] = "google/protobuf/";
 
 string DotsToUnderscores(const string& name) {
   return StringReplace(name, ".", "_", true);
@@ -65,7 +70,7 @@ const char* const kKeywordList[] = {
   "constexpr", "const_cast", "continue", "decltype", "default", "delete", "do",
   "double", "dynamic_cast", "else", "enum", "explicit", "extern", "false",
   "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable",
-  "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or",
+  "namespace", "new", "noexcept", "not", "not_eq", "NULL", "operator", "or",
   "or_eq", "private", "protected", "public", "register", "reinterpret_cast",
   "return", "short", "signed", "sizeof", "static", "static_assert",
   "static_cast", "struct", "switch", "template", "this", "thread_local",
@@ -162,9 +167,21 @@ string ClassName(const EnumDescriptor* enum_descriptor, bool qualified) {
 }
 
 
+string DependentBaseClassTemplateName(const Descriptor* descriptor) {
+  return ClassName(descriptor, false) + "_InternalBase";
+}
+
 string SuperClassName(const Descriptor* descriptor) {
   return HasDescriptorMethods(descriptor->file()) ?
       "::google::protobuf::Message" : "::google::protobuf::MessageLite";
+}
+
+string DependentBaseDownCast() {
+  return "reinterpret_cast<T*>(this)->";
+}
+
+string DependentBaseConstDownCast() {
+  return "reinterpret_cast<const T*>(this)->";
 }
 
 string FieldName(const FieldDescriptor* field) {
@@ -198,6 +215,60 @@ string FieldConstantName(const FieldDescriptor *field) {
   }
 
   return result;
+}
+
+bool IsFieldDependent(const FieldDescriptor* field) {
+  if (field->containing_oneof() != NULL &&
+      field->cpp_type() == FieldDescriptor::CPPTYPE_STRING) {
+    return true;
+  }
+  if (field->is_map()) {
+    const Descriptor* map_descriptor = field->message_type();
+    for (int i = 0; i < map_descriptor->field_count(); i++) {
+      if (IsFieldDependent(map_descriptor->field(i))) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE) {
+    return false;
+  }
+  if (field->containing_oneof() != NULL) {
+    // Oneof fields will always be dependent.
+    //
+    // This is a unique case for field codegen. Field generators are
+    // responsible for generating all the field-specific accessor
+    // functions, except for the clear_*() function; instead, field
+    // generators produce inline clearing code.
+    //
+    // For non-oneof fields, the Message class uses the inline clearing
+    // code to define the field's clear_*() function, as well as in the
+    // destructor. For oneof fields, the Message class generates a much
+    // more complicated clear_*() function, which clears only the oneof
+    // member that is set, in addition to clearing methods for each of the
+    // oneof members individually.
+    //
+    // Since oneofs do not have their own generator class, the Message code
+    // generation logic would be significantly complicated in order to
+    // split dependent and non-dependent manipulation logic based on
+    // whether the oneof truly needs to be dependent; so, for oneof fields,
+    // we just assume it (and its constituents) should be manipulated by a
+    // dependent base class function.
+    //
+    // This is less precise than how dependent message-typed fields are
+    // handled, but the cost is limited to only the generated code for the
+    // oneof field, which seems like an acceptable tradeoff.
+    return true;
+  }
+  if (field->file() == field->message_type()->file()) {
+    return false;
+  }
+  return true;
+}
+
+string DependentTypeName(const FieldDescriptor* field) {
+  return "InternalBase_" + field->name() + "_T";
 }
 
 string FieldMessageTypeName(const FieldDescriptor* field) {
@@ -360,7 +431,7 @@ string FilenameIdentifier(const string& filename) {
     } else {
       // Not alphanumeric.  To avoid any possibility of name conflicts we
       // use the hex code for the character.
-      StrAppend(&result, "_", ToHex(static_cast<uint8>(filename[i])));
+      StrAppend(&result, "_", strings::Hex(static_cast<uint8>(filename[i])));
     }
   }
   return result;
@@ -519,6 +590,107 @@ FieldOptions::CType EffectiveStringCType(const FieldDescriptor* field) {
   // Open-source protobuf release only supports STRING ctype.
   return FieldOptions::STRING;
 
+}
+
+bool IsAnyMessage(const FileDescriptor* descriptor) {
+  return descriptor->name() == kAnyProtoFile;
+}
+
+bool IsAnyMessage(const Descriptor* descriptor) {
+  return descriptor->name() == kAnyMessageName &&
+         descriptor->file()->name() == kAnyProtoFile;
+}
+
+bool IsWellKnownMessage(const FileDescriptor* descriptor) {
+  return !descriptor->name().compare(0, 16, kGoogleProtobufPrefix);
+}
+
+enum Utf8CheckMode {
+  STRICT = 0,  // Parsing will fail if non UTF-8 data is in string fields.
+  VERIFY = 1,  // Only log an error but parsing will succeed.
+  NONE = 2,  // No UTF-8 check.
+};
+
+// Which level of UTF-8 enforcemant is placed on this file.
+static Utf8CheckMode GetUtf8CheckMode(const FieldDescriptor* field) {
+  if (field->file()->syntax() == FileDescriptor::SYNTAX_PROTO3) {
+    return STRICT;
+  } else if (field->file()->options().optimize_for() !=
+             FileOptions::LITE_RUNTIME) {
+    return VERIFY;
+  } else {
+    return NONE;
+  }
+}
+
+static void GenerateUtf8CheckCode(const FieldDescriptor* field,
+                                  bool for_parse,
+                                  const map<string, string>& variables,
+                                  const char* parameters,
+                                  const char* strict_function,
+                                  const char* verify_function,
+                                  io::Printer* printer) {
+  switch (GetUtf8CheckMode(field)) {
+    case STRICT: {
+      if (for_parse) {
+        printer->Print("DO_(");
+      }
+      printer->Print(
+          "::google::protobuf::internal::WireFormatLite::$function$(\n",
+          "function", strict_function);
+      printer->Indent();
+      printer->Print(variables, parameters);
+      if (for_parse) {
+        printer->Print("::google::protobuf::internal::WireFormatLite::PARSE,\n");
+      } else {
+        printer->Print("::google::protobuf::internal::WireFormatLite::SERIALIZE,\n");
+      }
+      printer->Print("\"$full_name$\")", "full_name", field->full_name());
+      if (for_parse) {
+        printer->Print(")");
+      }
+      printer->Print(";\n");
+      printer->Outdent();
+      break;
+    }
+    case VERIFY: {
+      printer->Print(
+          "::google::protobuf::internal::WireFormat::$function$(\n",
+          "function", verify_function);
+      printer->Indent();
+      printer->Print(variables, parameters);
+      if (for_parse) {
+        printer->Print("::google::protobuf::internal::WireFormat::PARSE,\n");
+      } else {
+        printer->Print("::google::protobuf::internal::WireFormat::SERIALIZE,\n");
+      }
+      printer->Print("\"$full_name$\");\n", "full_name", field->full_name());
+      printer->Outdent();
+      break;
+    }
+    case NONE:
+      break;
+  }
+}
+
+void GenerateUtf8CheckCodeForString(const FieldDescriptor* field,
+                                    bool for_parse,
+                                    const map<string, string>& variables,
+                                    const char* parameters,
+                                    io::Printer* printer) {
+  GenerateUtf8CheckCode(field, for_parse, variables, parameters,
+                        "VerifyUtf8String", "VerifyUTF8StringNamedField",
+                        printer);
+}
+
+void GenerateUtf8CheckCodeForCord(const FieldDescriptor* field,
+                                  bool for_parse,
+                                  const map<string, string>& variables,
+                                  const char* parameters,
+                                  io::Printer* printer) {
+  GenerateUtf8CheckCode(field, for_parse, variables, parameters,
+                        "VerifyUtf8Cord", "VerifyUTF8CordNamedField",
+                        printer);
 }
 
 }  // namespace cpp

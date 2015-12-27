@@ -48,6 +48,7 @@
 #include <unistd.h>
 #endif
 
+#include <google/protobuf/stubs/logging.h>
 #include <google/protobuf/stubs/common.h>
 #include <google/protobuf/compiler/plugin.pb.h>
 #include <google/protobuf/compiler/code_generator.h>
@@ -134,20 +135,34 @@ int PluginMain(int argc, char* argv[], const CodeGenerator* generator) {
   CodeGeneratorResponse response;
   GeneratorResponseContext context(&response, parsed_files);
 
-  for (int i = 0; i < parsed_files.size(); i++) {
-    const FileDescriptor* file = parsed_files[i];
-
+  if (generator->HasGenerateAll()) {
     string error;
-    bool succeeded = generator->Generate(
-        file, request.parameter(), &context, &error);
+    bool succeeded = generator->GenerateAll(
+        parsed_files, request.parameter(), &context, &error);
 
     if (!succeeded && error.empty()) {
       error = "Code generator returned false but provided no error "
               "description.";
     }
     if (!error.empty()) {
-      response.set_error(file->name() + ": " + error);
-      break;
+      response.set_error(error);
+    }
+  } else {
+    for (int i = 0; i < parsed_files.size(); i++) {
+      const FileDescriptor* file = parsed_files[i];
+
+      string error;
+      bool succeeded = generator->Generate(
+          file, request.parameter(), &context, &error);
+
+      if (!succeeded && error.empty()) {
+        error = "Code generator returned false but provided no error "
+                "description.";
+      }
+      if (!error.empty()) {
+        response.set_error(file->name() + ": " + error);
+        break;
+      }
     }
   }
 

@@ -39,6 +39,7 @@
 #endif
 
 #include <google/protobuf/message.h>
+#include <google/protobuf/generated_enum_util.h>
 
 namespace google {
 namespace protobuf {
@@ -552,7 +553,7 @@ struct RefTypeTraits<
 
 template<typename T>
 struct RefTypeTraits<
-    T, typename internal::enable_if<internal::is_same<string, T>::value>::type> {
+    T, typename internal::enable_if< ::google::protobuf::internal::is_same<string, T>::value>::type> {
   typedef RepeatedFieldRefIterator<T> iterator;
   typedef RepeatedFieldAccessor AccessorType;
   typedef string AccessorValueType;

@@ -44,6 +44,7 @@
 #include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/wire_format.h>
 #include <google/protobuf/io/tokenizer.h>
+#include <google/protobuf/stubs/logging.h>
 #include <google/protobuf/stubs/common.h>
 #include <google/protobuf/stubs/strutil.h>
 #include <google/protobuf/stubs/map_util.h>
@@ -457,6 +458,61 @@ void Parser::SkipRestOfBlock() {
 
 // ===================================================================
 
+bool Parser::ValidateEnum(const EnumDescriptorProto* proto) {
+  bool has_allow_alias = false;
+  bool allow_alias = false;
+
+  for (int i = 0; i < proto->options().uninterpreted_option_size(); i++) {
+    const UninterpretedOption option = proto->options().uninterpreted_option(i);
+    if (option.name_size() > 1) {
+      continue;
+    }
+    if (!option.name(0).is_extension() &&
+        option.name(0).name_part() == "allow_alias") {
+      has_allow_alias = true;
+      if (option.identifier_value() == "true") {
+        allow_alias = true;
+      }
+      break;
+    }
+  }
+
+  if (has_allow_alias && !allow_alias) {
+    string error =
+        "\"" + proto->name() +
+        "\" declares 'option allow_alias = false;' which has no effect. "
+        "Please remove the declaration.";
+    // This needlessly clutters declarations with nops.
+    AddError(error);
+    return false;
+  }
+
+  set<int> used_values;
+  bool has_duplicates = false;
+  for (int i = 0; i < proto->value_size(); ++i) {
+    const EnumValueDescriptorProto enum_value = proto->value(i);
+    if (used_values.find(enum_value.number()) != used_values.end()) {
+      has_duplicates = true;
+      break;
+    } else {
+      used_values.insert(enum_value.number());
+    }
+  }
+  if (allow_alias && !has_duplicates) {
+    string error =
+        "\"" + proto->name() +
+        "\" declares support for enum aliases but no enum values share field "
+        "numbers. Please remove the unnecessary 'option allow_alias = true;' "
+        "declaration.";
+    // Generate an error if an enum declares support for duplicate enum values
+    // and does not use it protect future authors.
+    AddError(error);
+    return false;
+  }
+
+  return true;
+}
+
 bool Parser::Parse(io::Tokenizer* input, FileDescriptorProto* file) {
   input_ = input;
   had_errors_ = false;
@@ -686,6 +742,8 @@ bool Parser::ParseMessageStatement(DescriptorProto* message,
     LocationRecorder location(message_location,
                               DescriptorProto::kExtensionRangeFieldNumber);
     return ParseExtensions(message, location, containing_file);
+  } else if (LookingAt("reserved")) {
+    return ParseReserved(message, message_location);
   } else if (LookingAt("extend")) {
     LocationRecorder location(message_location,
                               DescriptorProto::kExtensionFieldNumber);
@@ -733,6 +791,13 @@ bool Parser::ParseMessageField(FieldDescriptorProto* field,
     FieldDescriptorProto::Label label;
     if (ParseLabel(&label, containing_file)) {
       field->set_label(label);
+      if (label == FieldDescriptorProto::LABEL_OPTIONAL &&
+          syntax_identifier_ == "proto3") {
+        AddError(
+            "Explicit 'optional' labels are disallowed in the Proto3 syntax. "
+            "To define 'optional' fields in Proto3, simply remove the "
+            "'optional' label, as fields are 'optional' by default.");
+      }
     }
   }
 
@@ -929,6 +994,42 @@ void Parser::GenerateMapEntry(const MapField& map_field,
   } else {
     value_field->set_type_name(map_field.value_type_name);
   }
+  // Propagate the "enforce_utf8" option to key and value fields if they
+  // are strings. This helps simplify the implementation of code generators
+  // and also reflection-based parsing code.
+  //
+  // The following definition:
+  //   message Foo {
+  //     map<string, string> value = 1 [enforce_utf8 = false];
+  //   }
+  // will be interpreted as:
+  //   message Foo {
+  //     message ValueEntry {
+  //       option map_entry = true;
+  //       string key = 1 [enforce_utf8 = false];
+  //       string value = 2 [enforce_utf8 = false];
+  //     }
+  //     repeated ValueEntry value = 1 [enforce_utf8 = false];
+  //  }
+  //
+  // TODO(xiaofeng): Remove this when the "enforce_utf8" option is removed
+  // from protocol compiler.
+  for (int i = 0; i < field->options().uninterpreted_option_size(); ++i) {
+    const UninterpretedOption& option =
+        field->options().uninterpreted_option(i);
+    if (option.name_size() == 1 &&
+        option.name(0).name_part() == "enforce_utf8" &&
+        !option.name(0).is_extension()) {
+      if (key_field->type() == FieldDescriptorProto::TYPE_STRING) {
+        key_field->mutable_options()->add_uninterpreted_option()
+            ->CopyFrom(option);
+      }
+      if (value_field->type() == FieldDescriptorProto::TYPE_STRING) {
+        value_field->mutable_options()->add_uninterpreted_option()
+            ->CopyFrom(option);
+      }
+    }
+  }
 }
 
 bool Parser::ParseFieldOptions(FieldDescriptorProto* field,
@@ -947,6 +1048,9 @@ bool Parser::ParseFieldOptions(FieldDescriptorProto* field,
       // We intentionally pass field_location rather than location here, since
       // the default value is not actually an option.
       DO(ParseDefaultAssignment(field, field_location, containing_file));
+    } else if (LookingAt("json_name")) {
+      // Like default value, this "json_name" is not an actual option.
+      DO(ParseJsonName(field, field_location, containing_file));
     } else {
       DO(ParseOption(field->mutable_options(), location,
                      containing_file, OPTION_ASSIGNMENT));
@@ -1093,6 +1197,28 @@ bool Parser::ParseDefaultAssignment(
 
   return true;
 }
+
+bool Parser::ParseJsonName(
+    FieldDescriptorProto* field,
+    const LocationRecorder& field_location,
+    const FileDescriptorProto* containing_file) {
+  if (field->has_json_name()) {
+    AddError("Already set option \"json_name\".");
+    field->clear_json_name();
+  }
+
+  DO(Consume("json_name"));
+  DO(Consume("="));
+
+  LocationRecorder location(field_location,
+                            FieldDescriptorProto::kJsonNameFieldNumber);
+  location.RecordLegacyLocation(
+      field, DescriptorPool::ErrorCollector::OPTION_VALUE);
+  DO(ConsumeString(field->mutable_json_name(),
+                   "Expected string for JSON name."));
+  return true;
+}
+
 
 bool Parser::ParseOptionNamePart(UninterpretedOption* uninterpreted_option,
                                  const LocationRecorder& part_location,
@@ -1353,6 +1479,77 @@ bool Parser::ParseExtensions(DescriptorProto* message,
   return true;
 }
 
+// This is similar to extension range parsing, except that "max" is not
+// supported, and accepts field name literals.
+bool Parser::ParseReserved(DescriptorProto* message,
+                           const LocationRecorder& message_location) {
+  // Parse the declaration.
+  DO(Consume("reserved"));
+  if (LookingAtType(io::Tokenizer::TYPE_STRING)) {
+    LocationRecorder location(message_location,
+                              DescriptorProto::kReservedNameFieldNumber);
+    return ParseReservedNames(message, location);
+  } else {
+    LocationRecorder location(message_location,
+                              DescriptorProto::kReservedRangeFieldNumber);
+    return ParseReservedNumbers(message, location);
+  }
+}
+
+
+bool Parser::ParseReservedNames(DescriptorProto* message,
+                                const LocationRecorder& parent_location) {
+  do {
+    LocationRecorder location(parent_location, message->reserved_name_size());
+    DO(ConsumeString(message->add_reserved_name(), "Expected field name."));
+  } while (TryConsume(","));
+  DO(ConsumeEndOfDeclaration(";", &parent_location));
+  return true;
+}
+
+bool Parser::ParseReservedNumbers(DescriptorProto* message,
+                                  const LocationRecorder& parent_location) {
+  bool first = true;
+  do {
+    LocationRecorder location(parent_location, message->reserved_range_size());
+
+    DescriptorProto::ReservedRange* range = message->add_reserved_range();
+    int start, end;
+    io::Tokenizer::Token start_token;
+    {
+      LocationRecorder start_location(
+          location, DescriptorProto::ReservedRange::kStartFieldNumber);
+      start_token = input_->current();
+      DO(ConsumeInteger(&start, (first ?
+                                 "Expected field name or number range." :
+                                 "Expected field number range.")));
+    }
+
+    if (TryConsume("to")) {
+      LocationRecorder end_location(
+          location, DescriptorProto::ReservedRange::kEndFieldNumber);
+      DO(ConsumeInteger(&end, "Expected integer."));
+    } else {
+      LocationRecorder end_location(
+          location, DescriptorProto::ReservedRange::kEndFieldNumber);
+      end_location.StartAt(start_token);
+      end_location.EndAt(start_token);
+      end = start;
+    }
+
+    // Users like to specify inclusive ranges, but in code we like the end
+    // number to be exclusive.
+    ++end;
+
+    range->set_start(start);
+    range->set_end(end);
+    first = false;
+  } while (TryConsume(","));
+
+  DO(ConsumeEndOfDeclaration(";", &parent_location));
+  return true;
+}
+
 bool Parser::ParseExtend(RepeatedPtrField<FieldDescriptorProto>* extensions,
                          RepeatedPtrField<DescriptorProto>* messages,
                          const LocationRecorder& parent_location,
@@ -1485,6 +1682,9 @@ bool Parser::ParseEnumDefinition(EnumDescriptorProto* enum_type,
   }
 
   DO(ParseEnumBlock(enum_type, enum_location, containing_file));
+
+  DO(ValidateEnum(enum_type));
+
   return true;
 }
 

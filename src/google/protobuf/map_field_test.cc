@@ -34,6 +34,7 @@
 #include <google/protobuf/stubs/shared_ptr.h>
 #endif
 
+#include <google/protobuf/stubs/logging.h>
 #include <google/protobuf/stubs/common.h>
 #include <google/protobuf/arena.h>
 #include <google/protobuf/map.h>
@@ -56,6 +57,7 @@ using unittest::TestAllTypes;
 
 class MapFieldBaseStub : public MapFieldBase {
  public:
+  typedef void InternalArenaConstructable_;
   typedef void DestructorSkippable_;
   MapFieldBaseStub() {}
   explicit MapFieldBaseStub(Arena* arena) : MapFieldBase(arena) {}
@@ -73,6 +75,28 @@ class MapFieldBaseStub : public MapFieldBase {
   bool IsRepeatedClean() { return state_ != 1; }
   void SetMapDirty() { state_ = 0; }
   void SetRepeatedDirty() { state_ = 1; }
+  bool ContainsMapKey(const MapKey& map_key) const {
+    return false;
+  }
+  bool InsertMapValue(const MapKey& map_key, MapValueRef* val) {
+    return false;
+  }
+  bool DeleteMapValue(const MapKey& map_key) {
+    return false;
+  }
+  bool EqualIterator(const MapIterator& a, const MapIterator& b) const {
+    return false;
+  }
+  int size() const { return 0; }
+  void MapBegin(MapIterator* map_iter) const {}
+  void MapEnd(MapIterator* map_iter) const {}
+  void InitializeIterator(MapIterator* map_iter) const {}
+  void DeleteIterator(MapIterator* map_iter) const {}
+  void CopyIterator(MapIterator* this_iterator,
+                    const MapIterator& other_iterator) const {}
+  void IncreaseIterator(MapIterator* map_iter) const {}
+  void SetDefaultMessageEntry(const Message* message) const {}
+  const Message* GetDefaultMessageEntry() const { return NULL; }
 };
 
 class MapFieldBasePrimitiveTest : public ::testing::Test {
@@ -144,15 +168,17 @@ TEST_F(MapFieldBasePrimitiveTest, Arena) {
   // Allocate a large initial block to avoid mallocs during hooked test.
   std::vector<char> arena_block(128 * 1024);
   ArenaOptions options;
-  options.initial_block = arena_block.data();
+  options.initial_block = &arena_block[0];
   options.initial_block_size = arena_block.size();
   Arena arena(options);
 
   {
-    NoHeapChecker no_heap;
+    // TODO(liujisi): Re-write the test to ensure the memory for the map and
+    // repeated fields are allocated from arenas.
+    // NoHeapChecker no_heap;
 
     MapFieldType* map_field =
-        Arena::Create<MapFieldType>(&arena, &arena, default_entry_);
+        Arena::CreateMessage<MapFieldType>(&arena, default_entry_);
 
     // Set content in map
     (*map_field->MutableMap())[100] = 101;
@@ -162,10 +188,12 @@ TEST_F(MapFieldBasePrimitiveTest, Arena) {
   }
 
   {
-    NoHeapChecker no_heap;
+    // TODO(liujisi): Re-write the test to ensure the memory for the map and
+    // repeated fields are allocated from arenas.
+    // NoHeapChecker no_heap;
 
     MapFieldBaseStub* map_field =
-        Arena::Create<MapFieldBaseStub>(&arena, &arena);
+        Arena::CreateMessage<MapFieldBaseStub>(&arena);
 
     // Trigger conversion to repeated field.
     EXPECT_TRUE(map_field->MutableRepeatedField() != NULL);

@@ -32,7 +32,6 @@
 //  Based on original Protocol Buffers design by
 //  Sanjay Ghemawat, Jeff Dean, and others.
 
-#include <set>
 #include <map>
 
 #include <google/protobuf/compiler/cpp/cpp_enum.h>
@@ -70,12 +69,20 @@ EnumGenerator::EnumGenerator(const EnumDescriptor* descriptor,
 
 EnumGenerator::~EnumGenerator() {}
 
+void EnumGenerator::FillForwardDeclaration(set<string>* enum_names) {
+  if (!options_.proto_h) {
+    return;
+  }
+  enum_names->insert(classname_);
+}
+
 void EnumGenerator::GenerateDefinition(io::Printer* printer) {
   map<string, string> vars;
   vars["classname"] = classname_;
   vars["short_name"] = descriptor_->name();
+  vars["enumbase"] = classname_ + (options_.proto_h ? " : int" : "");
 
-  printer->Print(vars, "enum $classname$ {\n");
+  printer->Print(vars, "enum $enumbase$ {\n");
   printer->Indent();
 
   const EnumValueDescriptor* min_value = descriptor_->value(0);
@@ -89,7 +96,6 @@ void EnumGenerator::GenerateDefinition(io::Printer* printer) {
     vars["number"] = Int32ToString(descriptor_->value(i)->number());
     vars["prefix"] = (descriptor_->containing_type() == NULL) ?
       "" : classname_ + "_";
-
 
     if (i > 0) printer->Print(",\n");
     printer->Print(vars, "$prefix$$name$ = $number$");
@@ -272,9 +278,9 @@ void EnumGenerator::GenerateMethods(io::Printer* printer) {
   if (descriptor_->containing_type() != NULL) {
     // We need to "define" the static constants which were declared in the
     // header, to give the linker a place to put them.  Or at least the C++
-    // standard says we have to.  MSVC actually insists tha we do _not_ define
-    // them again in the .cc file.
-    printer->Print("#ifndef _MSC_VER\n");
+    // standard says we have to.  MSVC actually insists that we do _not_ define
+    // them again in the .cc file, prior to VC++ 2015.
+    printer->Print("#if !defined(_MSC_VER) || _MSC_VER >= 1900\n");
 
     vars["parent"] = ClassName(descriptor_->containing_type(), false);
     vars["nested_name"] = descriptor_->name();
@@ -291,7 +297,7 @@ void EnumGenerator::GenerateMethods(io::Printer* printer) {
         "const int $parent$::$nested_name$_ARRAYSIZE;\n");
     }
 
-    printer->Print("#endif  // _MSC_VER\n");
+    printer->Print("#endif  // !defined(_MSC_VER) || _MSC_VER >= 1900\n");
   }
 }
 

@@ -56,6 +56,7 @@
 // Don't include this file for people not concerned about thread safety.
 #ifndef GOOGLE_PROTOBUF_NO_THREAD_SAFETY
 
+#include <google/protobuf/stubs/common.h>
 #include <google/protobuf/stubs/platform_macros.h>
 
 namespace google {
@@ -172,7 +173,7 @@ Atomic64 Release_Load(volatile const Atomic64* ptr);
 
 // Include our platform specific implementation.
 #define GOOGLE_PROTOBUF_ATOMICOPS_ERROR \
-#error "Atomic operations are not supported on your platform"
+"Atomic operations are not supported on your platform"
 
 // ThreadSanitizer, http://clang.llvm.org/docs/ThreadSanitizer.html.
 #if defined(THREAD_SANITIZER)
@@ -182,7 +183,7 @@ Atomic64 Release_Load(volatile const Atomic64* ptr);
 #if defined(GOOGLE_PROTOBUF_ARCH_IA32) || defined(GOOGLE_PROTOBUF_ARCH_X64)
 #include <google/protobuf/stubs/atomicops_internals_x86_msvc.h>
 #else
-GOOGLE_PROTOBUF_ATOMICOPS_ERROR
+#error GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #endif
 
 // Solaris
@@ -191,7 +192,7 @@ GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 
 // AIX
 #elif defined(GOOGLE_PROTOBUF_OS_AIX)
-#include <google/protobuf/stubs/atomicops_internals_aix.h>
+#include <google/protobuf/stubs/atomicops_internals_power.h>
 
 // Apple.
 #elif defined(GOOGLE_PROTOBUF_OS_APPLE)
@@ -209,6 +210,8 @@ GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #include <google/protobuf/stubs/atomicops_internals_arm_qnx.h>
 #elif defined(GOOGLE_PROTOBUF_ARCH_MIPS) || defined(GOOGLE_PROTOBUF_ARCH_MIPS64)
 #include <google/protobuf/stubs/atomicops_internals_mips_gcc.h>
+#elif defined(GOOGLE_PROTOBUF_ARCH_POWER)
+#include <google/protobuf/stubs/atomicops_internals_power.h>
 #elif defined(__native_client__)
 #include <google/protobuf/stubs/atomicops_internals_pnacl.h>
 #elif (((__GNUC__ == 4) && (__GNUC_MINOR__ >= 7)) || (__GNUC__ > 4))
@@ -217,15 +220,15 @@ GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #if __has_extension(c_atomic)
 #include <google/protobuf/stubs/atomicops_internals_generic_gcc.h>
 #else
-GOOGLE_PROTOBUF_ATOMICOPS_ERROR
+#error GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #endif
 #else
-GOOGLE_PROTOBUF_ATOMICOPS_ERROR
+#error GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #endif
 
 // Unknown.
 #else
-GOOGLE_PROTOBUF_ATOMICOPS_ERROR
+#error GOOGLE_PROTOBUF_ATOMICOPS_ERROR
 #endif
 
 // On some platforms we need additional declarations to make AtomicWord

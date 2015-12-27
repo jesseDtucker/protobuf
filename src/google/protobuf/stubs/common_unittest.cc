@@ -39,10 +39,10 @@
 #include <google/protobuf/testing/googletest.h>
 #include <gtest/gtest.h>
 
-#include "config.h"
-
 namespace google {
 namespace protobuf {
+using internal::NewCallback;
+using internal::NewPermanentCallback;
 namespace {
 
 // TODO(kenton):  More tests.

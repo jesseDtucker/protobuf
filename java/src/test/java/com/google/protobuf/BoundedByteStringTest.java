@@ -73,7 +73,7 @@ public class BoundedByteStringTest extends LiteralByteStringTest {
   }
 
   @Override
-  public void testCharsetToString() throws UnsupportedEncodingException {
+  public void testCharsetToString() {
     String testString = "I love unicode \u1234\u5678 characters";
     LiteralByteString unicode = new LiteralByteString(testString.getBytes(Internal.UTF_8));
     ByteString chopped = unicode.substring(2, unicode.size() - 6);
@@ -85,6 +85,7 @@ public class BoundedByteStringTest extends LiteralByteStringTest {
         testString.substring(2, testString.length() - 6), roundTripString);
   }
 
+  @Override
   public void testJavaSerialization() throws Exception {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     ObjectOutputStream oos = new ObjectOutputStream(out);
